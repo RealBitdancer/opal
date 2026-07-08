@@ -1,0 +1,66 @@
+# Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
+# SPDX-License-Identifier: MIT
+
+# Builds the WebAssembly demo player (examples/web) with Emscripten and deploys it, together
+# with index.html and the public-domain HSC tracks, to GitHub Pages. Runs on pushes to main
+# and on demand. Enable Pages once under Settings -> Pages -> Source: GitHub Actions.
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: emscripten
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v16
+
+      - name: Configure
+        run: cmake --preset web
+
+      - name: Build
+        run: cmake --build --preset web-release
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site/music
+          cp examples/web/index.html _site/
+          find build/web -name player.js   -exec cp {} _site/ \;
+          find build/web -name player.wasm -exec cp {} _site/ \;
+          cp music/*.hsc _site/music/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

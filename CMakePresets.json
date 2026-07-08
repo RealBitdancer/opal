@@ -1,0 +1,163 @@
+{
+  "version": 4,
+  "cmakeMinimumRequired": { "major": 3, "minor": 23, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "description": "Common settings.",
+      "cacheVariables": {
+        "OPAL_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Windows-only presets. The Visual Studio generator is resolved from the host default.",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "default",
+      "inherits": "windows-base",
+      "displayName": "Default (MSVC, x64)",
+      "description": "MSVC toolset, 64-bit. The default build on Windows. Configures into ./build/msvc-x64.",
+      "binaryDir": "${sourceDir}/build/msvc-x64",
+      "architecture": "x64"
+    },
+    {
+      "name": "clang",
+      "inherits": "windows-base",
+      "displayName": "Clang (clang-cl, x64)",
+      "description": "Clang toolset (clang-cl) that ships with Visual Studio, 64-bit. Configures into ./build/clang-x64.",
+      "binaryDir": "${sourceDir}/build/clang-x64",
+      "architecture": "x64",
+      "toolset": "ClangCL"
+    },
+    {
+      "name": "msvc-x86",
+      "inherits": "windows-base",
+      "displayName": "MSVC (x86, 32-bit)",
+      "description": "MSVC toolset, 32-bit. Configures into ./build/msvc-x86.",
+      "binaryDir": "${sourceDir}/build/msvc-x86",
+      "architecture": "Win32"
+    },
+    {
+      "name": "clang-x86",
+      "inherits": "windows-base",
+      "displayName": "Clang (clang-cl, x86, 32-bit)",
+      "description": "Clang toolset (clang-cl), 32-bit. Configures into ./build/clang-x86.",
+      "binaryDir": "${sourceDir}/build/clang-x86",
+      "architecture": "Win32",
+      "toolset": "ClangCL"
+    },
+    {
+      "name": "gcc",
+      "inherits": "windows-base",
+      "displayName": "GCC (MinGW-w64, x64)",
+      "description": "MinGW-w64 GCC, 64-bit. Uses Ninja Multi-Config so Debug and Release share one tree (./build/gcc-x64). Resolves the triplet-prefixed compiler via PATH, so the MinGW-w64 x64 bin directory (e.g. C:/msys64/mingw64/bin on a standard MSYS2 install) must be on PATH when configuring.",
+      "binaryDir": "${sourceDir}/build/gcc-x64",
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "x86_64-w64-mingw32-gcc"
+      }
+    },
+    {
+      "name": "gcc-x86",
+      "inherits": "windows-base",
+      "displayName": "GCC (MinGW-w64, x86, 32-bit)",
+      "description": "MinGW-w64 GCC, 32-bit. Configures into ./build/gcc-x86. Resolves the triplet-prefixed compiler via PATH, so the MinGW-w64 x86 bin directory (e.g. C:/msys64/mingw32/bin on a standard MSYS2 install) must be on PATH when configuring.",
+      "binaryDir": "${sourceDir}/build/gcc-x86",
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "i686-w64-mingw32-gcc"
+      }
+    },
+    {
+      "name": "linux",
+      "inherits": "base",
+      "displayName": "GCC (Linux)",
+      "description": "Linux GCC. Uses Ninja Multi-Config so Debug and Release share one tree (./build/linux). Requires ninja.",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "binaryDir": "${sourceDir}/build/linux",
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc"
+      }
+    },
+    {
+      "name": "macos",
+      "inherits": "base",
+      "displayName": "Clang (macOS)",
+      "description": "macOS Apple Clang from the Xcode command line tools. Uses Ninja Multi-Config so Debug and Release share one tree (./build/macos). Requires ninja.",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "binaryDir": "${sourceDir}/build/macos",
+      "generator": "Ninja Multi-Config"
+    },
+    {
+      "name": "android",
+      "inherits": "base",
+      "displayName": "Clang (Android NDK)",
+      "description": "Cross-compiles the opal static library with the Android NDK. Library only; the example player is a console program. Needs ANDROID_NDK_HOME and ninja. Defaults to arm64-v8a; pass -DANDROID_ABI=<abi> to override (wipe ./build/android when switching). Configures into ./build/android.",
+      "condition": { "type": "notEquals", "lhs": "$env{ANDROID_NDK_HOME}", "rhs": "" },
+      "binaryDir": "${sourceDir}/build/android",
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-21",
+        "OPAL_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "ios",
+      "inherits": "base",
+      "displayName": "Clang (iOS)",
+      "description": "Cross-compiles the opal static library for iOS with Apple Clang. Library only; the example player is a console program. Static libs need no code signing. Defaults to the device SDK; pass -DCMAKE_OSX_SYSROOT=iphonesimulator for the simulator (wipe ./build/ios when switching). Needs ninja. Configures into ./build/ios.",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "binaryDir": "${sourceDir}/build/ios",
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0",
+        "OPAL_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "web",
+      "inherits": "base",
+      "displayName": "Emscripten (WebAssembly)",
+      "description": "Cross-compiles the WebAssembly demo player (examples/web) with Emscripten. The console player is replaced by the browser front-end. Needs the Emscripten SDK active so $EMSDK is set (source emsdk_env), plus ninja. Configures into ./build/web.",
+      "condition": { "type": "notEquals", "lhs": "$env{EMSDK}", "rhs": "" },
+      "binaryDir": "${sourceDir}/build/web",
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug",             "displayName": "MSVC x64 Debug",    "configurePreset": "default",   "configuration": "Debug" },
+    { "name": "release",           "displayName": "MSVC x64 Release",  "configurePreset": "default",   "configuration": "Release" },
+    { "name": "clang-debug",       "displayName": "Clang x64 Debug",   "configurePreset": "clang",     "configuration": "Debug" },
+    { "name": "clang-release",     "displayName": "Clang x64 Release", "configurePreset": "clang",     "configuration": "Release" },
+    { "name": "x86-debug",         "displayName": "MSVC x86 Debug",    "configurePreset": "msvc-x86",  "configuration": "Debug" },
+    { "name": "x86-release",       "displayName": "MSVC x86 Release",  "configurePreset": "msvc-x86",  "configuration": "Release" },
+    { "name": "clang-x86-debug",   "displayName": "Clang x86 Debug",   "configurePreset": "clang-x86", "configuration": "Debug" },
+    { "name": "clang-x86-release", "displayName": "Clang x86 Release", "configurePreset": "clang-x86", "configuration": "Release" },
+    { "name": "gcc-debug",         "displayName": "GCC x64 Debug",     "configurePreset": "gcc",       "configuration": "Debug" },
+    { "name": "gcc-release",       "displayName": "GCC x64 Release",   "configurePreset": "gcc",       "configuration": "Release" },
+    { "name": "gcc-x86-debug",     "displayName": "GCC x86 Debug",     "configurePreset": "gcc-x86",   "configuration": "Debug" },
+    { "name": "gcc-x86-release",   "displayName": "GCC x86 Release",   "configurePreset": "gcc-x86",   "configuration": "Release" },
+    { "name": "linux-debug",       "displayName": "Linux Debug",       "configurePreset": "linux",     "configuration": "Debug" },
+    { "name": "linux-release",     "displayName": "Linux Release",     "configurePreset": "linux",     "configuration": "Release" },
+    { "name": "macos-debug",       "displayName": "macOS Debug",       "configurePreset": "macos",     "configuration": "Debug" },
+    { "name": "macos-release",     "displayName": "macOS Release",     "configurePreset": "macos",     "configuration": "Release" },
+    { "name": "android-debug",     "displayName": "Android Debug",     "configurePreset": "android",   "configuration": "Debug" },
+    { "name": "android-release",   "displayName": "Android Release",   "configurePreset": "android",   "configuration": "Release" },
+    { "name": "ios-debug",         "displayName": "iOS Debug",         "configurePreset": "ios",       "configuration": "Debug" },
+    { "name": "ios-release",       "displayName": "iOS Release",       "configurePreset": "ios",       "configuration": "Release" },
+    { "name": "web-debug",         "displayName": "Web Debug",         "configurePreset": "web",       "configuration": "Debug" },
+    { "name": "web-release",       "displayName": "Web Release",       "configurePreset": "web",       "configuration": "Release" }
+  ]
+}

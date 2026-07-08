@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opal — AdLib demo player</title>
+<style>
+  :root {
+    --desk: #131316;
+    --face: #9a9aa4;
+    --face-hi: #e2e2ea;
+    --face-lo: #3c3c46;
+    --face-dk: #71717d;
+    --screen: #000000;
+    --amber: #f9a825;
+    --amber-hi: #ffcf6e;
+    --white: #e9e9f0;
+    --dim: #62605a;
+    --red: #ff4a3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--desk);
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+    display: flex; align-items: flex-start; justify-content: center; padding: 1.5rem .75rem;
+    color: var(--white);
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px),
+      radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.45) 100%);
+  }
+  .tracker {
+    width: 100%; max-width: 640px; background: var(--face);
+    border: 2px solid; border-color: var(--face-hi) var(--face-lo) var(--face-lo) var(--face-hi);
+    box-shadow: 4px 4px 0 rgba(0,0,0,.5);
+    padding: 3px;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--face);
+    border: 1px solid; border-color: var(--face-hi) var(--face-lo) var(--face-lo) var(--face-hi);
+    padding: 4px 8px; margin-bottom: 3px;
+  }
+  .titlebar h1 {
+    flex: 1; margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .18em;
+    text-transform: uppercase; color: #1a1a20; text-shadow: 1px 1px 0 rgba(255,255,255,.28);
+  }
+  .winbtn {
+    width: 14px; height: 14px; background: var(--face);
+    border: 1px solid; border-color: var(--face-hi) var(--face-lo) var(--face-lo) var(--face-hi);
+  }
+  .inset {
+    border: 2px solid; border-color: var(--face-lo) var(--face-hi) var(--face-hi) var(--face-lo);
+    background: var(--screen);
+  }
+  .info { padding: 6px 10px; margin-bottom: 3px; color: var(--amber); font-size: 12px;
+    text-transform: uppercase; letter-spacing: .04em; }
+  .info b { color: var(--white); font-weight: 400; }
+  .info a { color: var(--amber-hi); }
+  .listhead {
+    padding: 4px 10px; color: var(--dim); font-size: 11px; letter-spacing: .2em;
+    text-transform: uppercase; border-bottom: 1px solid #1c1c20;
+  }
+  ol { list-style: none; margin: 0; padding: 2px 0; }
+  .track {
+    width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+    font: inherit; color: var(--amber); padding: .42rem 10px;
+    display: flex; gap: .8rem; align-items: baseline; text-transform: uppercase;
+  }
+  .track:hover { background: #221a08; }
+  .track:disabled { cursor: default; color: var(--dim); }
+  .num { color: var(--amber-hi); width: 2ch; text-align: right; }
+  .title { flex: 1; }
+  .track.playing { background: var(--amber); color: #16130c; }
+  .track.playing .num { color: #16130c; }
+  .track.playing .title::after { content: " ◄►"; color: #16130c; }
+  .vu { display: flex; gap: 6px; align-items: flex-end; justify-content: center;
+    padding: 8px 10px 4px; margin: 3px 0; }
+  .ch { display: flex; flex-direction: column; align-items: center; gap: 3px; flex: 0 1 30px; }
+  .meter { width: 100%; height: 44px; position: relative; overflow: hidden;
+    background: #0e0e10; border: 1px solid #1c1c20; }
+  .meter i {
+    position: absolute; left: 1px; right: 1px; bottom: 1px; height: 5%;
+    background: linear-gradient(to top, #17d94a 0 55%, #ffd24d 55% 80%, var(--red) 80% 100%);
+    background-size: 100% 42px; background-position: bottom;
+  }
+  .ch label { color: var(--dim); font-size: 10px; }
+  body.playing .meter i { animation: vu .5s steps(5) infinite alternate; }
+  body.playing .ch:nth-child(2n) .meter i { animation-duration: .38s; }
+  body.playing .ch:nth-child(3n) .meter i { animation-duration: .61s; }
+  body.playing .ch:nth-child(4n) .meter i { animation-duration: .44s; animation-delay: .12s; }
+  body.playing .ch:nth-child(5n) .meter i { animation-duration: .7s; animation-delay: .2s; }
+  @keyframes vu { from { height: 12%; } to { height: 96%; } }
+  .transport { display: flex; align-items: center; gap: 8px; padding: 3px 0 0; }
+  button.stop {
+    font: inherit; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+    color: #20242e; background: var(--face); cursor: pointer; padding: .35rem 1rem;
+    border: 2px solid; border-color: var(--face-hi) var(--face-lo) var(--face-lo) var(--face-hi);
+  }
+  button.stop:active { border-color: var(--face-lo) var(--face-hi) var(--face-hi) var(--face-lo);
+    transform: translate(1px, 1px); }
+  button.stop:disabled { color: var(--face-dk); cursor: default; }
+  .status { flex: 1; padding: .35rem .6rem; color: var(--amber); font-size: 12px;
+    text-transform: uppercase; white-space: nowrap; overflow: hidden; }
+  .status::after { content: "▊"; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .about { margin-top: 3px; padding: 5px 10px; color: var(--dim); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .04em; }
+  .about a { color: var(--amber-hi); text-decoration: none; }
+  .about a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="tracker">
+  <div class="titlebar">
+    <h1>▚▚ opal tracker — AdLib demo player ▞▞</h1>
+    <div class="winbtn"></div><div class="winbtn"></div>
+  </div>
+
+  <div class="inset info">
+    chip..: <b>YMF262 (OPL3) @ 49716 Hz → WebAssembly</b><br>
+    format: <b>HSC AdLib Composer / 9 channels</b><br>
+    music.: <b>Hannes Seifert 1992 (public domain)</b>
+  </div>
+
+  <div class="inset">
+    <div class="listhead">pos&nbsp;&nbsp;song title</div>
+    <ol id="list"><li><button class="track" disabled><span class="title">Loading…</span></button></li></ol>
+  </div>
+
+  <div class="inset vu" id="vu"></div>
+
+  <div class="transport">
+    <button class="stop" id="stop" disabled>■ Stop</button>
+    <span class="inset status" id="status">Starting WebAssembly…</span>
+  </div>
+
+  <div class="inset about">
+    Click a track to play — browsers unlock audio on a click.
+    Source &amp; attribution: <a href="https://github.com/RealBitdancer/opal">github.com/RealBitdancer/opal</a>
+  </div>
+</div>
+
+<script src="player.js"></script>
+<script>
+  const TRACKS = [
+    "01 Shoot 'em up.hsc",
+    "02 Jazzpop Tune.hsc",
+    "03 Rocky Margarine.hsc",
+    "04 My Revenge.hsc",
+    "05 TRSI Techno Tune.hsc",
+    "06 Ad the Lib Groove.hsc",
+    "07 Still remember Rob.hsc",
+  ];
+
+  let mod = null;
+  let poll = null;
+  let playingBtn = null;
+
+  const listEl = document.getElementById("list");
+  const stopEl = document.getElementById("stop");
+  const statusEl = document.getElementById("status");
+  const vuEl = document.getElementById("vu");
+
+  const setStatus = (t) => { statusEl.textContent = t; };
+
+  let iosUnmuteAudio = null;
+  function bypassIosSilentSwitch() {
+    if (!iosUnmuteAudio) {
+      const rate = 8000, samples = 400;
+      const buf = new ArrayBuffer(44 + samples * 2);
+      const v = new DataView(buf);
+      const put = (off, str) => { for (let i = 0; i < str.length; i++) { v.setUint8(off + i, str.charCodeAt(i)); } };
+      put(0, "RIFF"); v.setUint32(4, 36 + samples * 2, true); put(8, "WAVE");
+      put(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+      put(36, "data"); v.setUint32(40, samples * 2, true);
+      let bin = "";
+      const b = new Uint8Array(buf);
+      for (let i = 0; i < b.length; i++) { bin += String.fromCharCode(b[i]); }
+      iosUnmuteAudio = new Audio("data:audio/wav;base64," + btoa(bin));
+      iosUnmuteAudio.loop = true;
+    }
+    iosUnmuteAudio.play().catch(() => {});
+  }
+
+  function splitName(file) {
+    const base = file.replace(/\.hsc$/i, "");
+    const m = base.match(/^(\d+)\s+(.*)$/);
+    return m ? { num: m[1], title: m[2] } : { num: "", title: base };
+  }
+
+  function buildList() {
+    listEl.innerHTML = "";
+    TRACKS.forEach((file) => {
+      const { num, title } = splitName(file);
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.className = "track";
+      btn.innerHTML = `<span class="num">${num}</span><span class="title"></span>`;
+      btn.querySelector(".title").textContent = title;
+      btn.addEventListener("click", () => play(file, btn));
+      li.appendChild(btn);
+      listEl.appendChild(li);
+    });
+  }
+
+  function buildVu() {
+    for (let c = 1; c <= 9; c++) {
+      const ch = document.createElement("div");
+      ch.className = "ch";
+      ch.innerHTML = `<div class="meter"><i></i></div><label>${c}</label>`;
+      vuEl.appendChild(ch);
+    }
+  }
+
+  function markPlaying(btn) {
+    if (playingBtn) { playingBtn.classList.remove("playing"); }
+    playingBtn = btn;
+    if (btn) { btn.classList.add("playing"); }
+    stopEl.disabled = !btn;
+    document.body.classList.toggle("playing", !!btn);
+  }
+
+  function startPoll() {
+    stopPoll();
+    poll = setInterval(() => {
+      if (mod && mod.ccall("webFinished", "number", [], [])) {
+        markPlaying(null);
+        setStatus("Finished.");
+        stopPoll();
+        if (iosUnmuteAudio) { iosUnmuteAudio.pause(); }
+      }
+    }, 400);
+  }
+  function stopPoll() { if (poll) { clearInterval(poll); poll = null; } }
+
+  async function play(file, btn) {
+    if (!mod) { return; }
+    bypassIosSilentSwitch();
+    mod.ccall("webInit", "number", [], []);
+    setStatus("Loading “" + splitName(file).title + "”…");
+    let bytes;
+    try {
+      const resp = await fetch("music/" + encodeURIComponent(file));
+      if (!resp.ok) { throw new Error(resp.status + " " + resp.statusText); }
+      bytes = new Uint8Array(await resp.arrayBuffer());
+    } catch (e) {
+      setStatus("Could not fetch " + file + " (" + e.message + ")");
+      return;
+    }
+    const ptr = mod._malloc(bytes.length);
+    mod.HEAPU8.set(bytes, ptr);
+    const ok = mod.ccall("webLoad", "number", ["string", "number", "number"], [file, ptr, bytes.length]);
+    mod._free(ptr);
+    if (!ok) {
+      setStatus("Playback failed for " + file);
+      markPlaying(null);
+      return;
+    }
+    markPlaying(btn);
+    setStatus("Playing “" + splitName(file).title + "”…");
+    startPoll();
+  }
+
+  stopEl.addEventListener("click", () => {
+    if (mod) { mod.ccall("webStop", null, [], []); }
+    stopPoll();
+    markPlaying(null);
+    setStatus("Stopped.");
+    if (iosUnmuteAudio) { iosUnmuteAudio.pause(); }
+  });
+
+  createPlayer().then((m) => {
+    mod = m;
+    buildList();
+    buildVu();
+    setStatus("Ready — pick a track.");
+  }).catch((e) => {
+    setStatus("Failed to load WebAssembly: " + e);
+  });
+</script>
+</body>
+</html>

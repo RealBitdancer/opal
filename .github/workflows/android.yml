@@ -1,0 +1,39 @@
+# Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
+# SPDX-License-Identifier: MIT
+
+# Cross-compiles the opal static library with the Android NDK for the main ABIs. Runs on
+# pushes to main (which includes merges) and on demand.
+
+name: android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86_64]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # The runner image ships several NDKs. Prefer the latest.
+      - name: Select NDK
+        run: echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake --preset android -DANDROID_ABI=${{ matrix.abi }}
+
+      - name: Build
+        run: |
+          for preset in android-debug android-release; do
+            cmake --build --preset "$preset"
+          done

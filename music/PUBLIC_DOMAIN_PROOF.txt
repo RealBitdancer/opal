@@ -1,0 +1,75 @@
+Provenance for the HSC tracks bundled in this folder (music/*.hsc).
+
+The tracks come from HSCDEMO3.EXE, a 1992 AdLib music demo by Hannes Seifert
+(author of the HSC format and the HSC AdLib Composer). Its title screen states,
+verbatim:
+----------------------------------------------------------------
+AdLib Music Demo Release III. By Hannes Seifert 1992. Public Domain Version.
+----------------------------------------------------------------
+
+The "Public Domain Version" line covers the demo and Seifert's own tracks. It does
+NOT cover every track: the demo bundles 38 songs, and its on-screen list gives a
+copyright for each one. Many are game soundtracks Seifert composed under contract
+and are marked with a publisher's copyright. Only the tracks the demo itself labels
+"independent" or "public domain" are included in this folder; the copyrighted ones
+are excluded.
+
+================================================================
+Per-track copyright, read directly from the running demo (all 38):
+================================================================
+INCLUDED here - bundled in music/, renamed to a contiguous 01-07 (Seifert's own;
+demo label shown, with original demo position):
+  01 Shoot 'em up            independent      [demo track 1]
+  02 Jazzpop Tune            independent      [demo track 2]
+  03 Rocky Margarine         independent      [demo track 4]
+  04 My Revenge              independent      [demo track 5]
+  05 TRSI Techno Tune        public domain    [demo track 6]
+  06 Ad the Lib Groove       independent      [demo track 7]
+  07 Still remember Rob      independent      [demo track 8]
+
+EXCLUDED - the demo's remaining tracks, by original demo position (not redistributed):
+  03 1869 Intro Music        (C) 1991 MAX Design
+  09 Facing the Atlantic     (C) 1992 MAX Design
+  10 Bad Jokes               (C) 1992 MAX Design
+  11 Ship Design             (C) 1992 MAX Design
+  12 No Credit               (C) 1992 MAX Design
+  13 European Office         (C) 1992 MAX Design
+  14 Russian Office          (C) 1992 MAX Design
+  15 Chinese Office          (C) 1992 MAX Design
+  16 North American Office   (C) 1992 MAX Design
+  17 Arabian Office          (C) 1992 MAX Design
+  18 Caribbean Office        (C) 1992 MAX Design
+  19 Indian Office           (C) 1992 MAX Design
+  20 African Office          (C) 1992 MAX Design
+  21 Scottish Office         (C) 1992 MAX Design
+  22 South American Office   (C) 1992 MAX Design
+  23 French Office           (C) 1992 MAX Design
+  24 Danger!                 (C) 1992 MAX Design
+  25 The Ship is sinking!    (C) 1992 MAX Design
+  26 News                    (C) 1992 MAX Design
+  27 The Shop is closed      (C) 1992 MAX Design
+  28 Sailor's Yarn           (C) 1992 MAX Design
+  29 Honour                  (C) 1992 MAX Design
+  30 Silvia's Theme          (C) 1992 NEO   (Neo Software)
+  31 A Child is born         (C) 1992 NEO   (Neo Software)
+  32 Osiris' Theme           (C) 1992 MAX Design
+  33 Ramses' Grave           (C) 1992 MAX Design
+  34 Completely different    (C) 1992 MAX Design
+  35 Desert Business         (C) 1992 MAX Design
+  36 The Dutch Egyptian      (C) 1992 MAX Design
+  37 Pyramids forever        (C) 1992 MAX Design
+  38 The Lightfield's gone   (C) 1992 MAX Design
+================================================================
+
+Corroborating record
+--------------------
+The Internet Archive catalogs the original HSCDEMO3.EXE under Creative Commons
+Public Domain Mark 1.0:
+  Title:   Adlib Music Demo III
+  Creator: Hannes Seifert
+  Date:    1992
+  License: http://creativecommons.org/publicdomain/mark/1.0/
+  Source:  https://archive.org/details/HSCDEMO3.EXE
+The archive description notes the demo "includes some of his compositions for the
+games Osiris, Whale's Voyage, 1869, as well as some previously unused tracks" -
+consistent with the per-track copyright labels above.

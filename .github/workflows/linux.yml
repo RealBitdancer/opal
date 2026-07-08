@@ -1,0 +1,31 @@
+# Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
+# SPDX-License-Identifier: MIT
+
+# Builds the Linux GCC CMake preset. Runs on pushes to main (which includes merges)
+# and on demand.
+
+name: linux
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: gcc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: cmake --preset linux
+
+      - name: Build
+        run: |
+          for preset in linux-debug linux-release; do
+            cmake --build --preset "$preset"
+          done

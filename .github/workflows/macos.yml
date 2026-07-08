@@ -1,0 +1,31 @@
+# Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
+# SPDX-License-Identifier: MIT
+
+# Builds the macOS Clang CMake preset. Runs on pushes to main (which includes merges)
+# and on demand.
+
+name: macos
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: clang
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ninja
+        run: brew install ninja
+
+      - name: Configure
+        run: cmake --preset macos
+
+      - name: Build
+        run: |
+          for preset in macos-debug macos-release; do
+            cmake --build --preset "$preset"
+          done

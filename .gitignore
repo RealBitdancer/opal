@@ -1,0 +1,23 @@
+# cmake build folder (build/ is the root; per-compiler/arch trees live in subfolders)
+[Bb][Uu][Ii][Ll][Dd]/
+
+# Compiled output / object files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+
+# Python cache
+**/__pycache__/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

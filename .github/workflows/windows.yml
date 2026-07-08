@@ -1,0 +1,72 @@
+# Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
+# SPDX-License-Identifier: MIT
+
+# Builds every Windows CMake preset flavor. Runs on pushes to main (which includes merges)
+# and on demand.
+
+name: windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: msvc-x64
+            configure: default
+            builds: debug release
+          - name: clang-x64
+            configure: clang
+            builds: clang-debug clang-release
+          - name: msvc-x86
+            configure: msvc-x86
+            builds: x86-debug x86-release
+          - name: clang-x86
+            configure: clang-x86
+            builds: clang-x86-debug clang-x86-release
+          - name: gcc-x64
+            configure: gcc
+            builds: gcc-debug gcc-release
+            msystem: MINGW64
+            packages: mingw-w64-x86_64-gcc mingw-w64-x86_64-ninja
+            mingw-path: C:\msys64\mingw64\bin
+          - name: gcc-x86
+            configure: gcc-x86
+            builds: gcc-x86-debug gcc-x86-release
+            msystem: MINGW32
+            packages: mingw-w64-i686-gcc mingw-w64-i686-ninja
+            mingw-path: C:\msys64\mingw32\bin
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MinGW-w64 toolchain
+        if: matrix.msystem != ''
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          release: false
+          install: ${{ matrix.packages }}
+
+      # The gcc presets resolve the triplet-prefixed compiler and ninja via PATH.
+      - name: Add MinGW-w64 to PATH
+        if: matrix.msystem != ''
+        run: Add-Content $env:GITHUB_PATH "${{ matrix.mingw-path }}"
+        shell: pwsh
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.configure }}
+
+      - name: Build
+        run: |
+          for preset in ${{ matrix.builds }}; do
+            cmake --build --preset "$preset"
+          done
+        shell: bash

@@ -1,0 +1,48 @@
+# Full manual is at https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+---
+BasedOnStyle: Microsoft
+
+IndentWidth: 4
+UseTab: Never
+
+ColumnLimit: 200
+
+SortIncludes: false
+
+IndentCaseLabels: true
+
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+BinPackParameters: false
+BinPackArguments: true
+
+# This applies to () [] <>
+AlignAfterOpenBracket: AlwaysBreak
+
+IndentExternBlock: NoIndent
+
+BreakBeforeBraces: Allman
+BraceWrapping:
+  AfterControlStatement: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeElse: true
+  IndentBraces: false
+  AfterExternBlock: false
+BreakBeforeBinaryOperators: None
+
+# Arguable but IMHO pointer is part of the type
+PointerAlignment: Left
+
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 1
+SpacesInAngles: false
+SpacesInContainerLiterals: true
+SpacesInCStyleCastParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
