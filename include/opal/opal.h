@@ -196,7 +196,7 @@ void Opal_FlushWriteBuf(Opal* self);
 /*!
  * \brief Set panning level per channel
  * \param self Pointer to the Opal instance
- * \param reg_num Channel number (multiplied by 256)
+ * \param reg_num Channel index 0 to 17, or 0 to 8 with bit 8 set for the second bank
  * \param pan Panning level (0 left, 64 middle, 127 right)
  */
 void Opal_Pan(Opal* self, uint16_t reg_num, uint8_t pan);
@@ -210,8 +210,9 @@ void Opal_Pan(Opal* self, uint16_t reg_num, uint8_t pan);
 void Opal_Sample(Opal* self, int16_t* left, int16_t* right);
 
 /*!
- * \brief Read the chip status register (bit 7 = Timer 1 overflow, bit 6 = Timer 2 overflow).
- *        Timer overflow bits are cleared after the read, as on real hardware.
+ * \brief Read the chip status register (bit 7 = IRQ, bit 6 = Timer 1 overflow, bit 5 = Timer 2
+ *        overflow). Flags stay set until a reset write (bit 7 of register 4), as on real
+ *        hardware.
  * \param self Pointer to the Opal instance
  * \return The status byte, as a real OPL would return on a status-port read
  */

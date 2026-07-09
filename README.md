@@ -1,10 +1,10 @@
 # opal
 
-[![windows](https://github.com/RealBitdancer/opal/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/windows.yml)
-[![linux](https://github.com/RealBitdancer/opal/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/linux.yml)
-[![macos](https://github.com/RealBitdancer/opal/actions/workflows/macos.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/macos.yml)
-[![android](https://github.com/RealBitdancer/opal/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/android.yml)
-[![ios](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml)
+[![Windows](https://github.com/RealBitdancer/opal/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/windows.yml)
+[![Linux](https://github.com/RealBitdancer/opal/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/linux.yml)
+[![macOS](https://github.com/RealBitdancer/opal/actions/workflows/macos.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/macos.yml)
+[![Android](https://github.com/RealBitdancer/opal/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/android.yml)
+[![iOS](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml)
 
 A feature complete OPL2 and OPL3 FM synthesis core in C11 with a small API and a
 permissive license.
@@ -22,9 +22,10 @@ here is a C11 port derived from the OpenMPT copy and wrapped in a small C API.
 
 Feature complete means the full register set that affects audio. The core implements two
 and four operator FM, all eight waveforms, the tremolo and vibrato LFOs, percussion mode
-with its noise generator, OPL2 waveform select, and the timers with their status
-register. CSW mode is decoded and then left inert. The real YMF262 ignores it, so opal
-ignores it with equal care.
+with its noise generator, and the timers with their status register. CSW mode is decoded
+and then left inert. The real YMF262 ignores it, so opal ignores it with equal care. The
+OPL2 waveform select enable bit receives the same treatment, because the YMF262 ignores
+that one too.
 
 ## Accuracy
 

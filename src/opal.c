@@ -156,16 +156,6 @@ static void Operator_UpdateKSL(OpalOperator* op)
     op->EgKsl = (uint8_t)ksl;
 }
 
-static uint16_t Operator_EffectiveWaveform(const OpalOperator* op)
-{
-    uint16_t wf = op->Waveform;
-    if (!op->Master->OPL3Enabled)
-    {
-        wf &= 0x03;
-    }
-    return wf;
-}
-
 static int16_t Operator_ExpCalc(uint32_t level)
 {
     if (level > 0x1FFF)
@@ -179,7 +169,7 @@ static int16_t Operator_Wave(const OpalOperator* op, uint16_t phase, uint16_t en
 {
     uint16_t out = 0;
     uint16_t neg = 0;
-    uint16_t waveform = Operator_EffectiveWaveform(op);
+    uint16_t waveform = op->Waveform;
 
     phase &= 0x3FF;
 
@@ -615,11 +605,8 @@ static void Operator_KeyOff(OpalOperator* op, uint8_t type)
     op->Key &= (uint8_t)~type;
 }
 
-static void Channel_ComputeKeyScaleNumber(OpalChannel* chan)
+static void Channel_UpdateOpsKSL(OpalChannel* chan)
 {
-    uint16_t lsb = chan->Master->NoteSel ? (uint16_t)(chan->Freq >> 9) : (uint16_t)((chan->Freq >> 8) & 1);
-    chan->KeyScaleNumber = (uint16_t)(chan->Octave << 1 | lsb);
-
     for (int i = 0; i < 2; i++)
     {
         if (chan->Op[i])
@@ -627,6 +614,13 @@ static void Channel_ComputeKeyScaleNumber(OpalChannel* chan)
             Operator_UpdateKSL(chan->Op[i]);
         }
     }
+}
+
+static void Channel_ComputeKeyScaleNumber(OpalChannel* chan)
+{
+    uint16_t lsb = chan->Master->NoteSel ? (uint16_t)((chan->Freq >> 8) & 1) : (uint16_t)(chan->Freq >> 9);
+    chan->KeyScaleNumber = (uint16_t)(chan->Octave << 1 | lsb);
+    Channel_UpdateOpsKSL(chan);
 }
 
 static void Channel_SetupAlg(OpalChannel* chan);
@@ -734,7 +728,8 @@ static void Channel_WriteA0(OpalChannel* chan, uint8_t data)
     if (chan->Master->OPL3Enabled && chan->ChanType == OpalCh4Op && chan->ChannelPair)
     {
         chan->ChannelPair->Freq = chan->Freq;
-        Channel_ComputeKeyScaleNumber(chan->ChannelPair);
+        chan->ChannelPair->KeyScaleNumber = chan->KeyScaleNumber;
+        Channel_UpdateOpsKSL(chan->ChannelPair);
     }
 }
 
@@ -753,7 +748,8 @@ static void Channel_WriteB0(OpalChannel* chan, uint8_t data)
     {
         chan->ChannelPair->Freq = chan->Freq;
         chan->ChannelPair->Octave = chan->Octave;
-        Channel_ComputeKeyScaleNumber(chan->ChannelPair);
+        chan->ChannelPair->KeyScaleNumber = chan->KeyScaleNumber;
+        Channel_UpdateOpsKSL(chan->ChannelPair);
     }
 }
 
@@ -826,10 +822,10 @@ static void Channel_SetupAlg(OpalChannel* chan)
             {
                 pair->Op[0]->Mod = &pair->Op[0]->FbMod;
                 pair->Op[1]->Mod = &chip->ZeroMod;
-                chan->Op[0]->Mod = &pair->Op[0]->Out;
+                chan->Op[0]->Mod = &pair->Op[1]->Out;
                 chan->Op[1]->Mod = &chan->Op[0]->Out;
-                chan->OutPtr[0] = &chan->Op[1]->Out;
-                chan->OutPtr[1] = &pair->Op[1]->Out;
+                chan->OutPtr[0] = &pair->Op[0]->Out;
+                chan->OutPtr[1] = &chan->Op[1]->Out;
                 chan->OutPtr[2] = &chip->ZeroMod;
                 chan->OutPtr[3] = &chip->ZeroMod;
                 break;
@@ -838,11 +834,11 @@ static void Channel_SetupAlg(OpalChannel* chan)
             {
                 pair->Op[0]->Mod = &pair->Op[0]->FbMod;
                 pair->Op[1]->Mod = &chip->ZeroMod;
-                chan->Op[0]->Mod = &chip->ZeroMod;
-                chan->Op[1]->Mod = &chan->Op[0]->Out;
-                chan->OutPtr[0] = &pair->Op[1]->Out;
-                chan->OutPtr[1] = &chan->Op[1]->Out;
-                chan->OutPtr[2] = &chip->ZeroMod;
+                chan->Op[0]->Mod = &pair->Op[1]->Out;
+                chan->Op[1]->Mod = &chip->ZeroMod;
+                chan->OutPtr[0] = &pair->Op[0]->Out;
+                chan->OutPtr[1] = &chan->Op[0]->Out;
+                chan->OutPtr[2] = &chan->Op[1]->Out;
                 chan->OutPtr[3] = &chip->ZeroMod;
                 break;
             }
@@ -850,7 +846,7 @@ static void Channel_SetupAlg(OpalChannel* chan)
         return;
     }
 
-    switch (chan->Alg & 0x03)
+    switch (chan->Alg & 0x01)
     {
         case 0:
         {
@@ -858,26 +854,6 @@ static void Channel_SetupAlg(OpalChannel* chan)
             chan->Op[1]->Mod = &chan->Op[0]->Out;
             chan->OutPtr[0] = &chan->Op[1]->Out;
             chan->OutPtr[1] = &chip->ZeroMod;
-            chan->OutPtr[2] = &chip->ZeroMod;
-            chan->OutPtr[3] = &chip->ZeroMod;
-            break;
-        }
-        case 1:
-        {
-            chan->Op[0]->Mod = &chan->Op[0]->FbMod;
-            chan->Op[1]->Mod = &chip->ZeroMod;
-            chan->OutPtr[0] = &chan->Op[0]->Out;
-            chan->OutPtr[1] = &chan->Op[1]->Out;
-            chan->OutPtr[2] = &chip->ZeroMod;
-            chan->OutPtr[3] = &chip->ZeroMod;
-            break;
-        }
-        case 2:
-        {
-            chan->Op[0]->Mod = &chan->Op[0]->FbMod;
-            chan->Op[1]->Mod = &chan->Op[0]->Out;
-            chan->OutPtr[0] = &chan->Op[1]->Out;
-            chan->OutPtr[1] = &chan->Op[1]->Out;
             chan->OutPtr[2] = &chip->ZeroMod;
             chan->OutPtr[3] = &chip->ZeroMod;
             break;
@@ -897,13 +873,14 @@ static void Channel_SetupAlg(OpalChannel* chan)
 
 static void Channel_UpdateAlg(OpalChannel* chan)
 {
+    chan->Alg = chan->ModulationType;
     if (chan->Master->OPL3Enabled)
     {
         if (chan->ChanType == OpalCh4Op)
         {
             chan->ChannelPair->Alg = (uint16_t)(0x04 | (chan->ModulationType << 1) | chan->ChannelPair->ModulationType);
             chan->Alg = (uint16_t)(0x08);
-            Channel_SetupAlg(chan);
+            Channel_SetupAlg(chan->ChannelPair);
         }
         else if (chan->ChanType == OpalCh4Op2)
         {
@@ -1050,7 +1027,8 @@ static void Opal_TickTimer(Opal* self, int t)
         self->TimerCount[t] = self->Timer[t];
         if (!(self->TimerControl & (uint8_t)(0x40 >> t)))
         {
-            self->Status |= (uint8_t)(0x80u >> t);
+            /* YMF262 status: bit 7 = IRQ, bit 6 = FT1, bit 5 = FT2. */
+            self->Status |= (uint8_t)(0x80 | (0x40 >> t));
         }
     }
 }
@@ -1220,9 +1198,7 @@ void Opal_SetSampleRate(Opal* self, int sample_rate)
 
 uint8_t Opal_Read(Opal* self)
 {
-    uint8_t status = self->Status;
-    self->Status &= (uint8_t)~0xC0;
-    return status;
+    return self->Status;
 }
 
 void Opal_Init(Opal* self, int sample_rate)
@@ -1418,10 +1394,6 @@ static void Opal_WriteReg(Opal* self, uint16_t reg_num, uint8_t val)
                     {
                         self->NoteSel = (val & 0x40) != 0;
                         self->CompositeSineWave = (val & 0x80) != 0;
-                        for (int i = 0; i < OpalNumChannels; i++)
-                        {
-                            Channel_ComputeKeyScaleNumber(&self->Chan[i]);
-                        }
                         break;
                     }
                 }

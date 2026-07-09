@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.23)
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-project(opal VERSION 1.0.0 LANGUAGES C)
+project(opal VERSION 1.0.1 LANGUAGES C)
 
 include(GNUInstallDirs)
 
