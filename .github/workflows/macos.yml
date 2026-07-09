@@ -4,7 +4,7 @@
 # Builds the macOS Clang CMake preset. Runs on pushes to main (which includes merges)
 # and on demand.
 
-name: macos
+name: macOS
 
 on:
   push:

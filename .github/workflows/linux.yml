@@ -4,7 +4,7 @@
 # Builds the Linux GCC CMake preset. Runs on pushes to main (which includes merges)
 # and on demand.
 
-name: linux
+name: Linux
 
 on:
   push:

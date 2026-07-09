@@ -4,7 +4,7 @@
 # Cross-compiles the opal static library with the Android NDK for the main ABIs. Runs on
 # pushes to main (which includes merges) and on demand.
 
-name: android
+name: Android
 
 on:
   push:

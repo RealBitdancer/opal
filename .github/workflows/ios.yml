@@ -4,7 +4,7 @@
 # Cross-compiles the opal static library for iOS device and simulator. Runs on pushes to
 # main (which includes merges) and on demand.
 
-name: ios
+name: iOS
 
 on:
   push:

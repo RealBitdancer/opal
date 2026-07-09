@@ -4,7 +4,7 @@
 # Builds every Windows CMake preset flavor. Runs on pushes to main (which includes merges)
 # and on demand.
 
-name: windows
+name: Windows
 
 on:
   push:
