@@ -9,8 +9,11 @@
 A feature complete OPL2 and OPL3 FM synthesis core in C11 with a small API and a
 permissive license.
 
-**Hear it first:** the [web player](https://realbitdancer.github.io/opal/) runs the core
-as WebAssembly in your browser and plays the bundled demo tracks. No build required.
+**Hear it first:**
+
+[![opal web player](examples/web/img/web-player.gif)](https://realbitdancer.github.io/opal/)
+
+Runs the core as WebAssembly in your browser and plays the bundled demo tracks. No build required.
 
 ## About
 

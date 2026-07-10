@@ -13,7 +13,7 @@ else()
     add_subdirectory(player)
 
     add_custom_target(player_web SOURCES
-        web/web.c
+        web/src/web.c
         web/index.html
         web/CMakeLists.txt
     )

@@ -6,7 +6,7 @@
 set(PLAYER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../player/src)
 
 add_executable(player_web
-    web.c
+    src/web.c
     ${PLAYER_SRC}/format_dro.c
     ${PLAYER_SRC}/format_hsc.c
     ${PLAYER_SRC}/format_imf.c
