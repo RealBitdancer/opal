@@ -166,6 +166,19 @@
 
   const setStatus = (t) => { statusEl.textContent = t; };
 
+  const wantsAutoplay = new URLSearchParams(location.search).has("play");
+
+  function firstTrackButton() {
+    return listEl.querySelector("button.track");
+  }
+
+  function tryAutoplay() {
+    const btn = firstTrackButton();
+    if (btn) {
+      play(TRACKS[0], btn);
+    }
+  }
+
   let iosUnmuteAudio = null;
   function bypassIosSilentSwitch() {
     if (!iosUnmuteAudio) {
@@ -277,7 +290,16 @@
     mod = m;
     buildList();
     buildVu();
-    setStatus("Ready — pick a track.");
+    if (wantsAutoplay) {
+      tryAutoplay();
+      document.addEventListener("pointerdown", () => {
+        if (!playingBtn) {
+          tryAutoplay();
+        }
+      }, { once: true });
+    } else {
+      setStatus("Ready — pick a track.");
+    }
   }).catch((e) => {
     setStatus("Failed to load WebAssembly: " + e);
   });

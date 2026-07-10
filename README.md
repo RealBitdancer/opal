@@ -5,15 +5,17 @@
 [![macOS](https://github.com/RealBitdancer/opal/actions/workflows/macos.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/macos.yml)
 [![Android](https://github.com/RealBitdancer/opal/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/android.yml)
 [![iOS](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml)
+[![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://realbitdancer.github.io/opal/?play=1)
 
 A feature complete OPL2 and OPL3 FM synthesis core in C11 with a small API and a
 permissive license.
 
-**Hear it first:**
+**Want to hear it?** Try the [live web demo](https://realbitdancer.github.io/opal/?play=1). It runs in
+your browser as WebAssembly, no build needed.
 
-[![opal web player](examples/web/img/web-player.gif)](https://realbitdancer.github.io/opal/)
+[![Click to open the live web demo](examples/web/img/web-player.gif)](https://realbitdancer.github.io/opal/?play=1)
 
-Runs the core as WebAssembly in your browser and plays the bundled demo tracks. No build required.
+*Click the preview or the link above to open the player.*
 
 ## About
 
