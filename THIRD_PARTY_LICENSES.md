@@ -2,7 +2,7 @@
 
 Project code is MIT. See LICENSE. That covers the first-party code: the C API, resampling, pan
 helper, example player, build system, and the thin miniaudio implementation TU. The project
-bundles a few third party components listed below. They carry their own licenses.
+bundles a few third-party components listed below. They carry their own licenses.
 
 ## Opal OPL3 emulator (`src/opal.c`, `include/opal/opal.h`)
 
@@ -19,7 +19,7 @@ bundles a few third party components listed below. They carry their own licenses
 
 ## miniaudio (`examples/common/miniaudio/include/miniaudio/miniaudio.h`)
 
-Copyright David Reid, https://miniaud.io . Dual public domain or MIT-0. Bundled as is. See end of miniaudio.h for text.
+Copyright David Reid (https://miniaud.io). Dual public domain or MIT-0. Bundled as is. See end of miniaudio.h for text.
 
 ## HSC decoder (`examples/player/src/format_hsc.c`)
 

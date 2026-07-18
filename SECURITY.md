@@ -14,7 +14,7 @@ Report vulnerabilities privately through GitHub's security advisories. Open the 
 of this repository and choose "Report a vulnerability". Please do not open a public issue
 for something exploitable.
 
-This is a spare time project with one maintainer, so the honest promise is best effort. You
+This is a spare-time project with one maintainer, so the honest promise is best effort. You
 can expect an acknowledgment within a week and a fix as fast as severity warrants.
 
 ## Scope

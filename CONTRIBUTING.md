@@ -21,24 +21,26 @@ world in any way we test for.
 ## Building and testing
 
 The README covers building. Every preset in CMakePresets.json is expected to configure and
-build cleanly, and the GitHub Actions workflows build all of them on every push. Run the
-one closest to your platform before opening a pull request.
+build cleanly. GitHub Actions builds them on every push to `main` (and when you run a
+workflow by hand). Pull requests do not get that matrix until they land on main, so run the
+preset closest to your platform before opening a pull request.
 
 ## Style
 
 The code follows a few firm conventions. Allman braces. A brace on every control body, with
-no one line bodies. `.clang-format` enforces the formatting, so run it and the argument is
+no one-line bodies. `.clang-format` enforces the formatting, so run it and the argument is
 over. Comment only what the code cannot say itself. A comment that narrates the line below
 it will be asked to leave.
 
-Naming has one historical exception. The public API, the `Opal` type, and its members keep
-the names of the public domain source so diffs against upstream stay readable. Everything
-else uses PascalCase types, camelCase functions, and SCREAMING_CASE macros.
+Naming keeps the public-domain core readable against upstream. The public API, the `Opal`
+type, its members, and the core's internal `Type_Method` helpers in `src/opal.c` keep those
+names. New code outside that core (player formats, tools, examples) uses PascalCase types,
+camelCase functions, and SCREAMING_CASE macros.
 
 ## Licensing
 
 The project's own code is MIT and your contributions are accepted under the same terms. The
-emulation core's public domain provenance and the bundled third party components are
+emulation core's public-domain provenance and the bundled third-party components are
 documented in THIRD_PARTY_LICENSES.md. Do not add dependencies with copyleft obligations,
 and do not add music without provenance. The `music/` folder is picky about that for good
 reason, as music/PUBLIC_DOMAIN_PROOF.txt explains.

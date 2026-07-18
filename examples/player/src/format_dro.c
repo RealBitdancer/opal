@@ -11,6 +11,7 @@
 #include <string.h>
 
 #define DRO_HEADER_SIZE 24
+#define DRO_HEADER_SIZE_EARLY 21
 
 typedef struct
 {
@@ -111,8 +112,17 @@ static MusicSource* droLoad(const char* path, const uint8_t* data, size_t size, 
         return NULL;
     }
 
+    // The earliest DOSBox builds wrote a single-byte hardware type (21-byte header). Later v1
+    // files pad it to a u32. Early files carry command data where the padding would be, so
+    // nonzero "padding" identifies them (same heuristic as AdPlug).
+    size_t headerSize = DRO_HEADER_SIZE;
+    if ((readU32Le(data + 20) & 0xFFFFFF00u) != 0)
+    {
+        headerSize = DRO_HEADER_SIZE_EARLY;
+    }
+
     uint32_t lengthBytes = readU32Le(data + 16);
-    size_t dataSize = size - DRO_HEADER_SIZE;
+    size_t dataSize = size - headerSize;
     if (lengthBytes > 0 && lengthBytes <= dataSize)
     {
         dataSize = lengthBytes;
@@ -126,7 +136,7 @@ static MusicSource* droLoad(const char* path, const uint8_t* data, size_t size, 
 
     s->base.step = droStep;
     s->base.free = droFree;
-    s->data = data + DRO_HEADER_SIZE;
+    s->data = data + headerSize;
     s->size = dataSize;
     s->sampleRate = sampleRate;
     return &s->base;

@@ -202,3 +202,52 @@ int webFinished(void)
 {
     return (songReady && song.ended && song.wait == 0 && song.tail == 0) ? 1 : 0;
 }
+
+static uint8_t levelFromOp(const OpalOperator* op)
+{
+    if (op == NULL || op->EnvelopeStage < 0)
+    {
+        return 0;
+    }
+    if (op->EgOut >= 511)
+    {
+        return 0;
+    }
+    return (uint8_t)(((511u - (uint32_t)op->EgOut) * 255u) / 511u);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void webLevels(uint8_t* out, int count)
+{
+    if (out == NULL || count <= 0)
+    {
+        return;
+    }
+
+    const int n = count < 9 ? count : 9;
+    if (!songReady)
+    {
+        memset(out, 0, (size_t)n);
+        if (count > n)
+        {
+            memset(out + n, 0, (size_t)(count - n));
+        }
+        return;
+    }
+
+    for (int ch = 0; ch < n; ++ch)
+    {
+        const OpalChannel* chan = &song.opl.Chan[ch];
+        uint8_t level = levelFromOp(chan->Op[0]);
+        uint8_t carrier = levelFromOp(chan->Op[1]);
+        if (carrier > level)
+        {
+            level = carrier;
+        }
+        out[ch] = level;
+    }
+    if (count > n)
+    {
+        memset(out + n, 0, (size_t)(count - n));
+    }
+}

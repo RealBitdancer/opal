@@ -82,17 +82,12 @@
   .meter { width: 100%; height: 44px; position: relative; overflow: hidden;
     background: #0e0e10; border: 1px solid #1c1c20; }
   .meter i {
-    position: absolute; left: 1px; right: 1px; bottom: 1px; height: 5%;
+    position: absolute; left: 1px; right: 1px; bottom: 1px; height: 0%;
     background: linear-gradient(to top, #17d94a 0 55%, #ffd24d 55% 80%, var(--red) 80% 100%);
     background-size: 100% 42px; background-position: bottom;
+    transition: height 40ms linear;
   }
   .ch label { color: var(--dim); font-size: 10px; }
-  body.playing .meter i { animation: vu .5s steps(5) infinite alternate; }
-  body.playing .ch:nth-child(2n) .meter i { animation-duration: .38s; }
-  body.playing .ch:nth-child(3n) .meter i { animation-duration: .61s; }
-  body.playing .ch:nth-child(4n) .meter i { animation-duration: .44s; animation-delay: .12s; }
-  body.playing .ch:nth-child(5n) .meter i { animation-duration: .7s; animation-delay: .2s; }
-  @keyframes vu { from { height: 12%; } to { height: 96%; } }
   .transport { display: flex; align-items: center; gap: 8px; padding: 3px 0 0; }
   button.stop {
     font: inherit; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
@@ -138,7 +133,7 @@
   </div>
 
   <div class="inset about">
-    Click a track to play — browsers unlock audio on a click.
+    Click a track to play. Browsers unlock audio on a click.
     Source &amp; attribution: <a href="https://github.com/RealBitdancer/opal">github.com/RealBitdancer/opal</a>
   </div>
 </div>
@@ -155,8 +150,12 @@
     "07 Still remember Rob.hsc",
   ];
 
+  const CHAN_COUNT = 9;
+
   let mod = null;
   let poll = null;
+  let levelsPtr = 0;
+  let meterBars = [];
   let playingBtn = null;
 
   const listEl = document.getElementById("list");
@@ -221,11 +220,30 @@
   }
 
   function buildVu() {
-    for (let c = 1; c <= 9; c++) {
+    meterBars = [];
+    for (let c = 1; c <= CHAN_COUNT; c++) {
       const ch = document.createElement("div");
       ch.className = "ch";
       ch.innerHTML = `<div class="meter"><i></i></div><label>${c}</label>`;
       vuEl.appendChild(ch);
+      meterBars.push(ch.querySelector("i"));
+    }
+  }
+
+  function clearMeters() {
+    for (let i = 0; i < meterBars.length; i++) {
+      meterBars[i].style.height = "0%";
+    }
+  }
+
+  function updateMeters() {
+    if (!mod || !levelsPtr) { return; }
+    mod.ccall("webLevels", null, ["number", "number"], [levelsPtr, CHAN_COUNT]);
+    const levels = mod.HEAPU8.subarray(levelsPtr, levelsPtr + CHAN_COUNT);
+    for (let i = 0; i < CHAN_COUNT; i++) {
+      // 0..255 envelope amplitude → bar height. Floor a tiny lit segment while silent stays 0.
+      const pct = levels[i] === 0 ? 0 : Math.max(4, Math.round((levels[i] * 100) / 255));
+      meterBars[i].style.height = pct + "%";
     }
   }
 
@@ -235,20 +253,28 @@
     if (btn) { btn.classList.add("playing"); }
     stopEl.disabled = !btn;
     document.body.classList.toggle("playing", !!btn);
+    if (!btn) { clearMeters(); }
   }
 
   function startPoll() {
     stopPoll();
-    poll = setInterval(() => {
+    const tick = () => {
+      updateMeters();
       if (mod && mod.ccall("webFinished", "number", [], [])) {
         markPlaying(null);
         setStatus("Finished.");
         stopPoll();
         if (iosUnmuteAudio) { iosUnmuteAudio.pause(); }
+        return;
       }
-    }, 400);
+      poll = requestAnimationFrame(tick);
+    };
+    poll = requestAnimationFrame(tick);
   }
-  function stopPoll() { if (poll) { clearInterval(poll); poll = null; } }
+  function stopPoll() {
+    if (poll) { cancelAnimationFrame(poll); poll = null; }
+    clearMeters();
+  }
 
   async function play(file, btn) {
     if (!mod) { return; }
@@ -288,6 +314,7 @@
 
   createPlayer().then((m) => {
     mod = m;
+    levelsPtr = mod._malloc(CHAN_COUNT);
     buildList();
     buildVu();
     if (wantsAutoplay) {
@@ -298,7 +325,7 @@
         }
       }, { once: true });
     } else {
-      setStatus("Ready — pick a track.");
+      setStatus("Ready. Pick a track.");
     }
   }).catch((e) => {
     setStatus("Failed to load WebAssembly: " + e);

@@ -46,6 +46,7 @@ static const int8_t ad_slot[0x20] =
     12, 13, 14, 15, 16, 17, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 };
 
+// The slot layout is documented for consumers in opal.h (OpalOperator notes). Keep them in sync.
 static const uint8_t ch_slot[18] =
 {
     0, 1, 2, 6, 7, 8, 12, 13, 14, 18, 19, 20, 24, 25, 26, 30, 31, 32,

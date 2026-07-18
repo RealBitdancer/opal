@@ -11,13 +11,13 @@ The "Public Domain Version" line covers the demo and Seifert's own tracks. It do
 NOT cover every track: the demo bundles 38 songs, and its on-screen list gives a
 copyright for each one. Many are game soundtracks Seifert composed under contract
 and are marked with a publisher's copyright. Only the tracks the demo itself labels
-"independent" or "public domain" are included in this folder; the copyrighted ones
+"independent" or "public domain" are included in this folder. The copyrighted ones
 are excluded.
 
 ================================================================
 Per-track copyright, read directly from the running demo (all 38):
 ================================================================
-INCLUDED here - bundled in music/, renamed to a contiguous 01-07 (Seifert's own;
+INCLUDED here (bundled in music/, renamed to a contiguous 01-07, Seifert's own,
 demo label shown, with original demo position):
   01 Shoot 'em up            independent      [demo track 1]
   02 Jazzpop Tune            independent      [demo track 2]
@@ -27,7 +27,7 @@ demo label shown, with original demo position):
   06 Ad the Lib Groove       independent      [demo track 7]
   07 Still remember Rob      independent      [demo track 8]
 
-EXCLUDED - the demo's remaining tracks, by original demo position (not redistributed):
+EXCLUDED (the demo's remaining tracks, by original demo position, not redistributed):
   03 1869 Intro Music        (C) 1991 MAX Design
   09 Facing the Atlantic     (C) 1992 MAX Design
   10 Bad Jokes               (C) 1992 MAX Design
@@ -71,5 +71,5 @@ Public Domain Mark 1.0:
   License: http://creativecommons.org/publicdomain/mark/1.0/
   Source:  https://archive.org/details/HSCDEMO3.EXE
 The archive description notes the demo "includes some of his compositions for the
-games Osiris, Whale's Voyage, 1869, as well as some previously unused tracks" -
+games Osiris, Whale's Voyage, 1869, as well as some previously unused tracks",
 consistent with the per-track copyright labels above.

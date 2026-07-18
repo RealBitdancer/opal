@@ -49,7 +49,25 @@ typedef struct OpalWriteBuf_t
     uint8_t  data;
 } OpalWriteBuf;
 
-/* A single FM operator (maps to one OPL3 slot) */
+/*
+    A single FM operator (maps to one OPL3 slot).
+
+    Slot layout: melodic channel ch (0-8 = bank 0, 9-17 = bank 1) uses Op[slot] as its modulator
+    and Op[slot + 3] as its carrier, where
+
+        slot = { 0,1,2, 6,7,8, 12,13,14, 18,19,20, 24,25,26, 30,31,32 }[ch]
+
+    In 4-op mode the paired channel contributes Op[slot + 6] and Op[slot + 9]. The same operators
+    are reachable in place through OpalChannel::Op[]. Prefer the indices when copying state out of
+    the struct (e.g. a visualizer snapshotting from another thread): the Op/Chan cross pointers
+    keep pointing into the original instance.
+
+    Fields useful for visualizers:
+        EnvelopeStage   -1 = off, 0 = attack, 1 = decay, 2 = sustain, 3 = release
+        EgOut           current total attenuation (envelope + output level + KSL + tremolo) in
+                        0.1875 dB steps where 0 is loudest and >= 511 is silence
+        Key             nonzero while keyed on (bit 0 = normal key on, bit 1 = rhythm key on)
+*/
 struct OpalOperator_t
 {
     Opal*           Master;
@@ -108,6 +126,11 @@ struct OpalChannel_t
 
 /*==================================================================================================
             Opal instance.
+
+            Opal_Init wires internal cross pointers (Chan[].Op, Op[].Chan, Op[].Mod, ...) into the
+            instance itself: initialize in place and do not copy or relocate an instance afterwards
+            (no memcpy/assignment, no reallocating containers). After any move, call Opal_Init on
+            the new address. This also resets all chip state.
  ==================================================================================================*/
 struct Opal_t
 {
@@ -158,14 +181,16 @@ struct Opal_t
             Public API.
  ==================================================================================================*/
 /*!
- * \brief Initialize Opal with a given output sample rate
+ * \brief Initialize Opal with a given output sample rate. Wires internal pointers to the
+ *        instance's address, so the struct must stay where it is initialized (see the
+ *        Opal instance notes above).
  * \param self Pointer to the Opal instance
  * \param sample_rate Desired output sample rate
  */
 void Opal_Init(Opal* self, int sample_rate);
 
 /*!
- * \brief Change the output sample rate of existing initialized instance
+ * \brief Change the output sample rate of an existing initialized instance
  * \param self Pointer to the Opal instance
  * \param sample_rate Desired output sample rate
  */

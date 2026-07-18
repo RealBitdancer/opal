@@ -7,7 +7,7 @@
 [![iOS](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml)
 [![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://realbitdancer.github.io/opal/?play=1)
 
-A feature complete OPL2 and OPL3 FM synthesis core in C11 with a small API and a
+A feature-complete OPL2 and OPL3 FM synthesis core in C11 with a small API and a
 permissive license.
 
 **Want to hear it?** Try the [live web demo](https://realbitdancer.github.io/opal/?play=1). It runs in
@@ -25,8 +25,8 @@ through them most of the music in DOS games and trackers. The core was written b
 of Reality for Reality Adlib Tracker 2 and released into the public domain. What you find
 here is a C11 port derived from the OpenMPT copy and wrapped in a small C API.
 
-Feature complete means the full register set that affects audio. The core implements two
-and four operator FM, all eight waveforms, the tremolo and vibrato LFOs, percussion mode
+Feature-complete means the full register set that affects audio. The core implements two-
+and four-operator FM, all eight waveforms, the tremolo and vibrato LFOs, percussion mode
 with its noise generator, and the timers with their status register. CSW mode is decoded
 and then left inert. The real YMF262 ignores it, so opal ignores it with equal care. The
 OPL2 waveform select enable bit receives the same treatment, because the YMF262 ignores
@@ -36,7 +36,7 @@ that one too.
 
 Stereo output matches established YMF262 emulators, including
 [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3), sample for sample at the chip's
-native rate of 49716 Hz. Waveforms, envelopes, LFOs, rhythm mode, two and four operator
+native rate of 49716 Hz. Waveforms, envelopes, LFOs, rhythm mode, two- and four-operator
 FM, feedback, stereo routing, and buffered register timing all follow hardware behavior.
 The right channel arrives one sample after the left because the YMF262 pipeline delays
 it. Reproducing the quirk is cheaper than explaining its absence.
@@ -44,7 +44,7 @@ it. Reproducing the quirk is cheaper than explaining its absence.
 ## Building
 
 You need CMake 3.23 or newer and a C11 compiler. Presets exist for Windows (MSVC, Clang,
-and MinGW in 32 and 64 bit), Linux (GCC), and macOS (Clang). All presets except the
+and MinGW in 32- and 64-bit), Linux (GCC), and macOS (Clang). All presets except the
 Visual Studio ones use Ninja Multi-Config and expect ninja on PATH. The full list lives
 in CMakePresets.json.
 
@@ -89,10 +89,17 @@ int16_t left, right;
 Opal_Sample(&chip, &left, &right);
 ```
 
+`Opal_Init` wires internal pointers into the instance. Keep the struct where you
+initialized it. Do not copy or relocate it afterward. After any move, call `Opal_Init`
+again on the new address (which also resets chip state).
+
 Internally the chip always runs at its native 49716 Hz and resamples to the rate passed
-to `Opal_Init` or `Opal_SetSampleRate`. `Opal_Pan` adds per channel panning on top of the
-chip's own left and right enables. `Opal_Read` returns the status register, which timer
-polling code will want.
+to `Opal_Init` or `Opal_SetSampleRate`. `Opal_Port` writes a register on the current sample.
+`Opal_PortBuffered` queues writes spaced a few chip samples apart for more accurate timing.
+`Opal_FlushWriteBuf` applies any queue at once. `Opal_Pan` adds per-channel panning on top
+of the chip's own left and right enables (channel index 0 to 17, or 0 to 8 with bit 8 set
+for the second bank). `Opal_Read` returns the status register, which timer polling code
+will want.
 
 ## Example player
 
@@ -107,17 +114,18 @@ player --rate 700 song.wlf
 ```
 
 A few limitations are worth knowing. DRO files must be version 1, meaning the header word
-at offset 8 is zero. HSC has no signature, so the player goes by the `.hsc` extension.
-IMF and WLF are also recognized by extension, and the replay rate defaults to 560 Hz for
-`.imf` and 700 Hz for `.wlf`. That rate is a property of the game rather than of the
-file, so the `--rate` flag exists for the exceptions.
+at offset 8 is zero. Both the usual 24-byte v1 header and the early DOSBox 21-byte form
+(single-byte hardware type, no padding) are accepted. HSC has no signature, so the player
+goes by the `.hsc` extension. IMF and WLF are also recognized by extension, and the replay
+rate defaults to 560 Hz for `.imf` and 700 Hz for `.wlf`. That rate is a property of the
+game rather than of the file, so the `--rate` flag exists for the exceptions.
 
-The player core is format agnostic. Each format sits behind the small interface in
+The player core is format-agnostic. Each format sits behind the small interface in
 `player_format.h`, and support for a new one is a single `format_*.c` away.
 
 ### Demo music
 
-The `music` folder holds seven public domain HSC tracks from HSCDEMO3.EXE, a demo
+The `music` folder holds seven public-domain HSC tracks from HSCDEMO3.EXE, a demo
 [Hannes Seifert](https://de.wikipedia.org/wiki/Hannes_Seifert) released in 1992. Only his
 own tracks are included, the ones the demo itself
 marks independent or public domain. The track list, the attribution, and the reason the
@@ -139,11 +147,13 @@ to main. The live copy is at
 ## Coding style
 
 The sources follow project conventions. Allman braces, a brace on every control body, and
-no one line bodies. `.clang-format` enforces all of it.
+no one-line bodies. `.clang-format` enforces all of it.
 
-Identifier naming is the one exception. The API, the `Opal` type, and its members keep
-the names from the public domain source rather than being forced into camelCase. The
-original API stays intact and diffs against upstream stay readable.
+Identifier naming is the one exception. The API, the `Opal` type, its members, and the
+core helpers in `src/opal.c` keep the names from the public-domain source rather than
+being forced into camelCase. The original API stays intact and diffs against upstream stay
+readable. New code outside that core follows PascalCase types and camelCase functions.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
@@ -154,4 +164,5 @@ option. Nothing in the library depends on LGPL code.
 
 Full attribution and the provenance of the ROM tables are in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Release history is in
-[CHANGELOG.md](CHANGELOG.md).
+[CHANGELOG.md](CHANGELOG.md). Language bindings: [BINDINGS.md](BINDINGS.md). Security
+reports: [SECURITY.md](SECURITY.md). How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
