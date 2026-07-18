@@ -1,0 +1,40 @@
+# Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
+# SPDX-License-Identifier: MIT
+
+# Creates a GitHub Release when a version tag (v*) is pushed. The release notes are the
+# tag's section of CHANGELOG.md, so the release page repeats what the changelog already
+# says instead of inventing a second history.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! [ -s notes.md ]; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "opal $GITHUB_REF_NAME" --notes-file notes.md

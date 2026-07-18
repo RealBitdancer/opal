@@ -23,7 +23,9 @@ world in any way we test for.
 The README covers building. Every preset in CMakePresets.json is expected to configure and
 build cleanly. GitHub Actions builds them on every push to `main` (and when you run a
 workflow by hand). Pull requests do not get that matrix until they land on main, so run the
-preset closest to your platform before opening a pull request.
+preset closest to your platform before opening a pull request. Pushing a version tag
+(`v1.x.y`) creates the GitHub Release automatically, with the tag's CHANGELOG.md section
+as the notes.
 
 ## Style
 
