@@ -57,18 +57,18 @@ static void dataCallback(ma_device* device, void* output, const void* input, ma_
             if (done)
             {
                 p->ended = true;
-                Opal_FlushWriteBuf(&p->opl);
+                opalFlushWriteBuf(&p->opl);
             }
         }
 
         if (p->wait > 0)
         {
-            Opal_Sample(&p->opl, &left, &right);
+            opalSample(&p->opl, &left, &right);
             --p->wait;
         }
         else if (p->tail > 0) // tail: keep sampling for releases
         {
-            Opal_Sample(&p->opl, &left, &right);
+            opalSample(&p->opl, &left, &right);
             --p->tail;
         }
         else if (!p->signaled)
@@ -219,7 +219,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    Opal_Init(&player.opl, (int)device.sampleRate);
+    opalInit(&player.opl, (int)device.sampleRate);
 
     // Probe formats in order. First match wins. A format may program the chip here.
     const MusicFormat* format = NULL;
@@ -249,7 +249,7 @@ int main(int argc, char** argv)
         player.ended = primedDone;
         if (primedDone)
         {
-            Opal_FlushWriteBuf(&player.opl);
+            opalFlushWriteBuf(&player.opl);
         }
     }
 
@@ -282,7 +282,7 @@ int main(int argc, char** argv)
     ma_event_wait(&player.finished);
 
     ma_device_uninit(&device); // stop device and join thread before freeing referenced data
-    Opal_FlushWriteBuf(&player.opl);
+    opalFlushWriteBuf(&player.opl);
     ma_event_uninit(&player.finished);
     player.source->free(player.source);
     free(file);

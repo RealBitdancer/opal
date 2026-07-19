@@ -79,7 +79,7 @@ static uint64_t droStep(MusicSource* base, Opal* opl, bool* done)
                 *done = true;
                 return 0;
             }
-            Opal_PortBuffered(opl, (uint16_t)(s->bank + s->data[s->pos]), s->data[s->pos + 1]);
+            opalWriteRegBuffered(opl, (uint16_t)(s->bank + s->data[s->pos]), s->data[s->pos + 1]);
             s->pos += 2;
             return 0;
         }
@@ -90,7 +90,7 @@ static uint64_t droStep(MusicSource* base, Opal* opl, bool* done)
                 *done = true;
                 return 0;
             }
-            Opal_PortBuffered(opl, (uint16_t)(s->bank + cmd), s->data[s->pos++]);
+            opalWriteRegBuffered(opl, (uint16_t)(s->bank + cmd), s->data[s->pos++]);
             return 0;
         }
     }

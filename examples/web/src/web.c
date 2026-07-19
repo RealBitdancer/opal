@@ -56,18 +56,18 @@ static void render(void* output, ma_uint32 frameCount)
             if (done)
             {
                 song.ended = true;
-                Opal_FlushWriteBuf(&song.opl);
+                opalFlushWriteBuf(&song.opl);
             }
         }
 
         if (song.wait > 0)
         {
-            Opal_Sample(&song.opl, &left, &right);
+            opalSample(&song.opl, &left, &right);
             --song.wait;
         }
         else if (song.tail > 0)
         {
-            Opal_Sample(&song.opl, &left, &right);
+            opalSample(&song.opl, &left, &right);
             --song.tail;
         }
 
@@ -155,7 +155,7 @@ int webLoad(const char* name, const uint8_t* data, int size)
     }
     memcpy(song.data, data, (size_t)size);
 
-    Opal_Init(&song.opl, (int)device.sampleRate);
+    opalInit(&song.opl, (int)device.sampleRate);
 
     for (size_t i = 0; i < sizeof formats / sizeof formats[0]; ++i)
     {
@@ -178,7 +178,7 @@ int webLoad(const char* name, const uint8_t* data, int size)
     song.ended = done;
     if (done)
     {
-        Opal_FlushWriteBuf(&song.opl);
+        opalFlushWriteBuf(&song.opl);
     }
 
     songReady = true;
@@ -205,15 +205,15 @@ int webFinished(void)
 
 static uint8_t levelFromOp(const OpalOperator* op)
 {
-    if (op == NULL || op->EnvelopeStage < 0)
+    if (op == NULL || op->envelopeStage == OPAL_ENVELOPE_STAGE_OFF)
     {
         return 0;
     }
-    if (op->EgOut >= 511)
+    if (op->egOut >= 511)
     {
         return 0;
     }
-    return (uint8_t)(((511u - (uint32_t)op->EgOut) * 255u) / 511u);
+    return (uint8_t)(((511u - (uint32_t)op->egOut) * 255u) / 511u);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -237,9 +237,9 @@ void webLevels(uint8_t* out, int count)
 
     for (int ch = 0; ch < n; ++ch)
     {
-        const OpalChannel* chan = &song.opl.Chan[ch];
-        uint8_t level = levelFromOp(chan->Op[0]);
-        uint8_t carrier = levelFromOp(chan->Op[1]);
+        const OpalChannel* chan = &song.opl.chan[ch];
+        uint8_t level = levelFromOp(&song.opl.op[chan->opSlot[0]]);
+        uint8_t carrier = levelFromOp(&song.opl.op[chan->opSlot[1]]);
         if (carrier > level)
         {
             level = carrier;

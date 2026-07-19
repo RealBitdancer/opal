@@ -2,6 +2,65 @@
 
 All notable changes to this project are documented here.
 
+## [2.0.0] - 2026-07-18
+
+This release breaks the public API deliberately. Every name now follows one consistent
+convention, and the index-based layout removes the structure copy problem that plagued
+the original public-domain source and every previous opal release, where an initialized
+chip could never be copied or moved.
+
+### Added
+
+- Public constants for the two state fields that previously spoke in magic numbers:
+  `OPAL_ENVELOPE_STAGE_*` (OFF, ATTACK, DECAY, SUSTAIN, RELEASE) for
+  `OpalOperator::envelopeStage` and `OPAL_CHANNEL_TYPE_*` (2OP, 4OP, 4OP2, DRUM) for
+  `OpalChannel::chanType`. Visualizers no longer hardcode the values.
+
+### Changed
+
+- The whole library follows one naming convention: functions are `opal` plus PascalCase
+  (`opalWriteReg`), types are `Opal` plus PascalCase with the struct tag matching the
+  typedef (`OpalChannel`, no `_t` suffix), struct members are camelCase (`egOut`,
+  `opSlot`), and macros stay `OPAL_` SCREAMING_CASE. The old mixed style kept the
+  public-domain source readable against upstream. That concern is retired, and the
+  internal helpers in `src/opal.c` follow the same convention now.
+- Three functions are renamed for accuracy as well as style: `Opal_Port` is now
+  `opalWriteReg` (the two-port address/data dance was never emulated, a register is
+  written directly), `Opal_PortBuffered` is now `opalWriteRegBuffered`, and `Opal_Read`
+  is now `opalReadStatus` (the status register is the only readable thing). The other
+  five change style only: `opalInit`, `opalSetSampleRate`, `opalFlushWriteBuf`,
+  `opalPan`, and `opalSample`. Signatures and behavior are unchanged.
+- The `Opal` struct is position independent. Every internal cross reference is an index
+  instead of a pointer: `OpalChannel::Op[]` became `opSlot[]` (operator indices),
+  `ChannelPair` became `pairIndex`, `OutPtr[]` became `outSource[]` (operator indices
+  whose outputs sum into the channel), and `OpalOperator::Mod` became `modSource`
+  (an operator index, `OPAL_MOD_OWN_FB`, or `OPAL_OP_NONE`). Copying, assigning, or
+  memcpying an instance yields a fully working chip, so a plain copy is a save state.
+  Rendered output is bit-identical to 1.0.2.
+- This is a breaking layout change for consumers that read `Opal` internals, such as
+  visualizers. The new index fields make the active FM routing readable as data, which
+  pointers never were.
+- The boolean flags (`noteSel`, `tremoloEnable`, and friends) are C11 `bool` instead of
+  the `opal_bool` int typedef.
+- The constants moved from an enum to defines: `OpalOPL3SampleRate` is now
+  `OPAL_OPL3_SAMPLE_RATE`, `OpalNumChannels` is `OPAL_CHANNEL_COUNT`, and
+  `OpalNumOperators` is `OPAL_OPERATOR_COUNT`. The header guard is
+  `OPAL_OPAL_H_INCLUDED`.
+
+### Removed
+
+- The `Master` and `Chan` back pointers on operators, the `Master` and pointer-based
+  pair and routing fields on channels, and the `ZeroMod` field on the chip. The no-copy
+  rule and every warning about it are gone with them.
+- `opal_bool`, `OPAL_TRUE`, and `OPAL_FALSE`.
+
+### Documentation
+
+- README and CONTRIBUTING describe the single naming convention. The section explaining
+  why the core kept its upstream names is gone, since the reason went with the names.
+- BINDINGS.md lists binding versions as the bound opal release plus a packaging
+  revision (`2.0.0-1` is the first opal-zig release binding opal `2.0.0`).
+
 ## [1.0.2] - 2026-07-18
 
 ### Added

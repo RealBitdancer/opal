@@ -55,7 +55,7 @@ static uint64_t imfStep(MusicSource* base, Opal* opl, bool* done)
     uint16_t delay = readU16Le(s->data + s->pos + 2);
     s->pos += 4;
 
-    Opal_PortBuffered(opl, reg, val);
+    opalWriteRegBuffered(opl, reg, val);
     if (delay == 0)
     {
         return 0; // more writes now, caller steps again

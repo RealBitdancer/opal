@@ -51,22 +51,22 @@ typedef struct
 static void hscSetFreq(HscSource* s, Opal* opl, uint8_t chan, uint16_t freq)
 {
     s->adlFreq[chan] = (uint8_t)((s->adlFreq[chan] & ~3) | (freq >> 8));
-    Opal_PortBuffered(opl, (uint16_t)(0xa0 + chan), (uint8_t)(freq & 0xff));
-    Opal_PortBuffered(opl, (uint16_t)(0xb0 + chan), s->adlFreq[chan]);
+    opalWriteRegBuffered(opl, (uint16_t)(0xa0 + chan), (uint8_t)(freq & 0xff));
+    opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), s->adlFreq[chan]);
 }
 
 static void hscSetVolume(HscSource* s, Opal* opl, uint8_t chan, int volc, int volm)
 {
     const uint8_t* ins = s->instr[s->channel[chan].inst];
     uint8_t op = opTable[chan];
-    Opal_PortBuffered(opl, (uint16_t)(0x43 + op), (uint8_t)(volc | (ins[2] & ~63)));
+    opalWriteRegBuffered(opl, (uint16_t)(0x43 + op), (uint8_t)(volc | (ins[2] & ~63)));
     if (ins[8] & 1)
     {
-        Opal_PortBuffered(opl, (uint16_t)(0x40 + op), (uint8_t)(volm | (ins[3] & ~63)));
+        opalWriteRegBuffered(opl, (uint16_t)(0x40 + op), (uint8_t)(volm | (ins[3] & ~63)));
     }
     else
     {
-        Opal_PortBuffered(opl, (uint16_t)(0x40 + op), ins[3]);
+        opalWriteRegBuffered(opl, (uint16_t)(0x40 + op), ins[3]);
     }
 }
 
@@ -80,16 +80,16 @@ static void hscSetInstr(HscSource* s, Opal* opl, uint8_t chan, uint8_t insnr)
     uint8_t op = opTable[chan];
 
     s->channel[chan].inst = insnr;
-    Opal_PortBuffered(opl, (uint16_t)(0xb0 + chan), 0);
-    Opal_PortBuffered(opl, (uint16_t)(0xc0 + chan), ins[8]);
-    Opal_PortBuffered(opl, (uint16_t)(0x23 + op), ins[0]);
-    Opal_PortBuffered(opl, (uint16_t)(0x20 + op), ins[1]);
-    Opal_PortBuffered(opl, (uint16_t)(0x63 + op), ins[4]);
-    Opal_PortBuffered(opl, (uint16_t)(0x60 + op), ins[5]);
-    Opal_PortBuffered(opl, (uint16_t)(0x83 + op), ins[6]);
-    Opal_PortBuffered(opl, (uint16_t)(0x80 + op), ins[7]);
-    Opal_PortBuffered(opl, (uint16_t)(0xe3 + op), ins[9]);
-    Opal_PortBuffered(opl, (uint16_t)(0xe0 + op), ins[10]);
+    opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), 0);
+    opalWriteRegBuffered(opl, (uint16_t)(0xc0 + chan), ins[8]);
+    opalWriteRegBuffered(opl, (uint16_t)(0x23 + op), ins[0]);
+    opalWriteRegBuffered(opl, (uint16_t)(0x20 + op), ins[1]);
+    opalWriteRegBuffered(opl, (uint16_t)(0x63 + op), ins[4]);
+    opalWriteRegBuffered(opl, (uint16_t)(0x60 + op), ins[5]);
+    opalWriteRegBuffered(opl, (uint16_t)(0x83 + op), ins[6]);
+    opalWriteRegBuffered(opl, (uint16_t)(0x80 + op), ins[7]);
+    opalWriteRegBuffered(opl, (uint16_t)(0xe3 + op), ins[9]);
+    opalWriteRegBuffered(opl, (uint16_t)(0xe0 + op), ins[10]);
     hscSetVolume(s, opl, chan, ins[2] & 63, ins[3] & 63);
 }
 
@@ -178,18 +178,18 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
                         s->mode6 = 1;
                     }
                 }
-                Opal_PortBuffered(opl, 0xbd, s->bd);
+                opalWriteRegBuffered(opl, 0xbd, s->bd);
                 break;
             }
             case 0x60: // set feedback
             {
-                Opal_PortBuffered(opl, (uint16_t)(0xc0 + chan), (uint8_t)((s->instr[s->channel[chan].inst][8] & 1) + (effOp << 1)));
+                opalWriteRegBuffered(opl, (uint16_t)(0xc0 + chan), (uint8_t)((s->instr[s->channel[chan].inst][8] & 1) + (effOp << 1)));
                 break;
             }
             case 0xa0: // set carrier volume
             {
                 uint8_t vol = (uint8_t)(effOp << 2);
-                Opal_PortBuffered(opl, (uint16_t)(0x43 + opTable[chan]), (uint8_t)(vol | (s->instr[s->channel[chan].inst][2] & ~63)));
+                opalWriteRegBuffered(opl, (uint16_t)(0x43 + opTable[chan]), (uint8_t)(vol | (s->instr[s->channel[chan].inst][2] & ~63)));
                 break;
             }
             case 0xb0: // set modulator volume
@@ -197,21 +197,21 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
                 uint8_t vol = (uint8_t)(effOp << 2);
                 if (s->instr[inst][8] & 1)
                 {
-                    Opal_PortBuffered(opl, (uint16_t)(0x40 + opTable[chan]), (uint8_t)(vol | (s->instr[s->channel[chan].inst][3] & ~63)));
+                    opalWriteRegBuffered(opl, (uint16_t)(0x40 + opTable[chan]), (uint8_t)(vol | (s->instr[s->channel[chan].inst][3] & ~63)));
                 }
                 else
                 {
-                    Opal_PortBuffered(opl, (uint16_t)(0x40 + opTable[chan]), (uint8_t)(vol | (s->instr[inst][3] & ~63)));
+                    opalWriteRegBuffered(opl, (uint16_t)(0x40 + opTable[chan]), (uint8_t)(vol | (s->instr[inst][3] & ~63)));
                 }
                 break;
             }
             case 0xc0: // set instrument volume
             {
                 uint8_t db = (uint8_t)(effOp << 2);
-                Opal_PortBuffered(opl, (uint16_t)(0x43 + opTable[chan]), (uint8_t)(db | (s->instr[s->channel[chan].inst][2] & ~63)));
+                opalWriteRegBuffered(opl, (uint16_t)(0x43 + opTable[chan]), (uint8_t)(db | (s->instr[s->channel[chan].inst][2] & ~63)));
                 if (s->instr[inst][8] & 1)
                 {
-                    Opal_PortBuffered(opl, (uint16_t)(0x40 + opTable[chan]), (uint8_t)(db | (s->instr[s->channel[chan].inst][3] & ~63)));
+                    opalWriteRegBuffered(opl, (uint16_t)(0x40 + opTable[chan]), (uint8_t)(db | (s->instr[s->channel[chan].inst][3] & ~63)));
                 }
                 break;
             }
@@ -244,7 +244,7 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
         if ((note == 0x7f - 1) || ((note / 12) & ~7))
         {
             s->adlFreq[chan] &= ~32;
-            Opal_PortBuffered(opl, (uint16_t)(0xb0 + chan), s->adlFreq[chan]);
+            opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), s->adlFreq[chan]);
             continue;
         }
 
@@ -259,7 +259,7 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
         {
             s->adlFreq[chan] = okt;
         }
-        Opal_PortBuffered(opl, (uint16_t)(0xb0 + chan), 0);
+        opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), 0);
         hscSetFreq(s, opl, chan, fnr);
 
         if (s->mode6)
@@ -268,24 +268,24 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
             {
                 case 6:
                 {
-                    Opal_PortBuffered(opl, 0xbd, (uint8_t)(s->bd & ~16));
+                    opalWriteRegBuffered(opl, 0xbd, (uint8_t)(s->bd & ~16));
                     s->bd |= 48;
                     break; // bass drum
                 }
                 case 7:
                 {
-                    Opal_PortBuffered(opl, 0xbd, (uint8_t)(s->bd & ~1));
+                    opalWriteRegBuffered(opl, 0xbd, (uint8_t)(s->bd & ~1));
                     s->bd |= 33;
                     break; // hi-hat
                 }
                 case 8:
                 {
-                    Opal_PortBuffered(opl, 0xbd, (uint8_t)(s->bd & ~2));
+                    opalWriteRegBuffered(opl, 0xbd, (uint8_t)(s->bd & ~2));
                     s->bd |= 34;
                     break; // cymbal
                 }
             }
-            Opal_PortBuffered(opl, 0xbd, s->bd);
+            opalWriteRegBuffered(opl, 0xbd, s->bd);
         }
     }
 }
@@ -440,15 +440,15 @@ static MusicSource* hscLoad(const char* path, const uint8_t* data, size_t size, 
     }
 
     // Enable waveform select and load default instruments.
-    Opal_PortBuffered(opl, 0x01, 0x20);
-    Opal_PortBuffered(opl, 0x08, 0x80);
-    Opal_PortBuffered(opl, 0xBD, 0x00);
+    opalWriteRegBuffered(opl, 0x01, 0x20);
+    opalWriteRegBuffered(opl, 0x08, 0x80);
+    opalWriteRegBuffered(opl, 0xBD, 0x00);
     for (uint8_t i = 0; i < 9; i++)
     {
         hscSetInstr(s, opl, i, i);
     }
 
-    Opal_FlushWriteBuf(opl);
+    opalFlushWriteBuf(opl);
 
     return &s->base;
 }

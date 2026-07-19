@@ -5,8 +5,11 @@ wrote one, or know of one that is missing, send a pull request and it will be ad
 
 ## Language bindings
 
-| Name                                                  | opal version | Language                   | License |
-| :---------------------------------------------------- | :----------: | :------------------------: | :-----: |
-| [opal-zig](https://github.com/RealBitdancer/opal-zig) | 1.0.2        | [Zig](https://ziglang.org) | MIT     |
+| Name                                                  | Binding version | Language                   | License |
+| :---------------------------------------------------- | :-------------: | :------------------------: | :-----: |
+| [opal-zig](https://github.com/RealBitdancer/opal-zig) | 2.0.0-1         | [Zig](https://ziglang.org) | MIT     |
+
+Binding versions are the bound opal release plus a packaging revision, so `2.0.0-1` is
+the first binding release for opal `2.0.0`.
 
 Bindings usually follow the naming convention `opal-{language}`.

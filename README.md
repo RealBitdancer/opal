@@ -81,25 +81,25 @@ whatever rate you asked for.
 #include <opal/opal.h>
 
 Opal chip;
-Opal_Init(&chip, 48000);
-Opal_Port(&chip, 0x20, 0x21);
+opalInit(&chip, 48000);
+opalWriteReg(&chip, 0x20, 0x21);
 /* set registers, key on, etc */
 
 int16_t left, right;
-Opal_Sample(&chip, &left, &right);
+opalSample(&chip, &left, &right);
 ```
 
-`Opal_Init` wires internal pointers into the instance. Keep the struct where you
-initialized it. Do not copy or relocate it afterward. After any move, call `Opal_Init`
-again on the new address (which also resets chip state).
+The instance holds no internal pointers: every cross reference is an index. Copy it,
+assign it, memcpy it, or move it freely. A copy is a complete save state and plays on
+from the moment it was taken.
 
 Internally the chip always runs at its native 49716 Hz and resamples to the rate passed
-to `Opal_Init` or `Opal_SetSampleRate`. `Opal_Port` writes a register on the current sample.
-`Opal_PortBuffered` queues writes spaced a few chip samples apart for more accurate timing.
-`Opal_FlushWriteBuf` applies any queue at once. `Opal_Pan` adds per-channel panning on top
-of the chip's own left and right enables (channel index 0 to 17, or 0 to 8 with bit 8 set
-for the second bank). `Opal_Read` returns the status register, which timer polling code
-will want.
+to `opalInit` or `opalSetSampleRate`. `opalWriteReg` writes a register on the current
+sample. `opalWriteRegBuffered` queues writes spaced a few chip samples apart for more
+accurate timing. `opalFlushWriteBuf` applies any queue at once. `opalPan` adds
+per-channel panning on top of the chip's own left and right enables (channel index 0 to
+17, or 0 to 8 with bit 8 set for the second bank). `opalReadStatus` returns the status
+register, which timer polling code will want.
 
 ## Example player
 
@@ -149,11 +149,11 @@ to main. The live copy is at
 The sources follow project conventions. Allman braces, a brace on every control body, and
 no one-line bodies. `.clang-format` enforces all of it.
 
-Identifier naming is the one exception. The API, the `Opal` type, its members, and the
-core helpers in `src/opal.c` keep the names from the public-domain source rather than
-being forced into camelCase. The original API stays intact and diffs against upstream stay
-readable. New code outside that core follows PascalCase types and camelCase functions.
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Naming is uniform across the tree. Types are PascalCase, functions and struct members
+are camelCase, macros are SCREAMING_CASE, and the core's public API carries an `opal`
+prefix (`opalWriteReg`, `OpalChannel`, `egOut`). Earlier releases kept the public-domain
+source's names for upstream diffability. Consistency won. The full rules are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
