@@ -129,6 +129,11 @@ static int16_t opalClipSample(int32_t sample)
     return (int16_t)sample;
 }
 
+static int16_t opalInterpolate(int16_t last, int16_t curr, int32_t fract)
+{
+    return (int16_t)(last + (int32_t)(((int64_t)fract * (curr - last)) / 65536));
+}
+
 static void operatorUpdateKsl(const Opal* chip, OpalOperator* op)
 {
     const OpalChannel* chan = &chip->chan[op->chanIndex];
@@ -1165,8 +1170,8 @@ void opalSample(Opal* self, int16_t* left, int16_t* right)
     }
 
     int32_t fract = (int32_t)(((int64_t)self->sampleAccum * 65536 + self->sampleRate / 2) / self->sampleRate);
-    *left = (int16_t)(self->lastOutput[0] + ((fract * (self->currOutput[0] - self->lastOutput[0])) / 65536));
-    *right = (int16_t)(self->lastOutput[1] + ((fract * (self->currOutput[1] - self->lastOutput[1])) / 65536));
+    *left = opalInterpolate(self->lastOutput[0], self->currOutput[0], fract);
+    *right = opalInterpolate(self->lastOutput[1], self->currOutput[1], fract);
 
     self->sampleAccum += OPAL_OPL3_SAMPLE_RATE;
 }

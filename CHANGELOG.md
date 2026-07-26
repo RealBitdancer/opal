@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [2.0.1] - 2026-07-25
+
+### Fixed
+
+- The output resampler in `opalSample` multiplied the 16.16 interpolation fraction by the
+  step between two consecutive chip samples in `int`. Both factors reach 65535, so the
+  product overflows a 32-bit signed integer whenever a loud track swings more than half
+  of full scale in one chip sample, which OPL3 material with both banks and rhythm mode
+  does routinely. The result is undefined behavior: a garbage sample under a plain
+  compiler, and an immediate abort under UBSan or any toolchain that traps on signed
+  overflow. The multiply is now 64 bit, in the new `opalInterpolate` helper. Output for
+  every non-overflowing sample is unchanged, so this is bit-identical to 2.0.0 wherever
+  2.0.0 was defined at all.
+
 ## [2.0.0] - 2026-07-18
 
 This release breaks the public API deliberately. Every name now follows one consistent
