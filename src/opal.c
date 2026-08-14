@@ -154,11 +154,16 @@ static int16_t operatorExpCalc(uint32_t level)
     return (int16_t)((expTable[level & 0xFF] << 1) >> (level >> 8));
 }
 
-static int16_t operatorWave(const OpalOperator* op, uint16_t phase, uint16_t envelope)
+static int16_t operatorWave(const Opal* chip, const OpalOperator* op, uint16_t phase, uint16_t envelope)
 {
     uint16_t out = 0;
     uint16_t neg = 0;
     uint16_t waveform = op->waveform;
+
+    if (!chip->opl3Enabled)
+    {
+        waveform &= 0x03;
+    }
 
     phase &= 0x3FF;
 
@@ -580,7 +585,7 @@ static void operatorGenerate(const Opal* chip, OpalOperator* op)
         mod = op->fbMod;
     }
     uint16_t phase = (uint16_t)(op->phaseOut + mod);
-    op->out = operatorWave(op, phase, op->egOut);
+    op->out = operatorWave(chip, op, phase, op->egOut);
 }
 
 static void operatorProcess(Opal* chip, OpalOperator* op)
@@ -908,23 +913,10 @@ static void channelWriteC0(Opal* chip, OpalChannel* chan, uint8_t data)
     chan->modulationType = (uint16_t)(data & 1);
     channelUpdateAlg(chip, chan);
 
-    if (chip->opl3Enabled)
-    {
-        chan->cha = ((data >> 4) & 1) ? 0xFFFF : 0;
-        chan->chb = ((data >> 5) & 1) ? 0xFFFF : 0;
-        chan->chc = ((data >> 6) & 1) ? 0xFFFF : 0;
-        chan->chd = ((data >> 7) & 1) ? 0xFFFF : 0;
-    }
-    else
-    {
-        chan->cha = 0xFFFF;
-        chan->chb = 0xFFFF;
-        chan->chc = 0;
-        chan->chd = 0;
-    }
-
-    /* chc and chd are stored for register completeness. Stereo output uses cha/chb
-       with the same one-sample right delay as the YMF262 pipeline. */
+    chan->cha = ((data >> 4) & 1) ? 0xFFFF : 0;
+    chan->chb = ((data >> 5) & 1) ? 0xFFFF : 0;
+    chan->chc = ((data >> 6) & 1) ? 0xFFFF : 0;
+    chan->chd = ((data >> 7) & 1) ? 0xFFFF : 0;
 }
 
 static void channelKeyOn(Opal* chip, const OpalChannel* chan)
@@ -1001,7 +993,6 @@ static void channelSet4Op(Opal* self, uint8_t data)
         {
             primary->chanType = OPAL_CHANNEL_TYPE_2OP;
             secondary->chanType = OPAL_CHANNEL_TYPE_2OP;
-            primary->pairIndex = OPAL_CH_NONE;
             channelUpdateAlg(self, primary);
             channelUpdateAlg(self, secondary);
         }
@@ -1021,6 +1012,29 @@ static int32_t channelAccumOutput(const Opal* chip, const OpalChannel* chan)
     return accm;
 }
 
+static int32_t channelMix(const Opal* chip, const OpalChannel* chan, uint16_t enable)
+{
+    if (!chip->opl3Enabled)
+    {
+        if (chan->chanIndex >= 9)
+        {
+            return 0;
+        }
+        enable = 0xFFFF;
+    }
+
+    int32_t accm = channelAccumOutput(chip, chan);
+    return (int32_t)((int16_t)(accm & (int16_t)enable));
+}
+
+static void opalRefreshNew(Opal* self)
+{
+    for (int i = 0; i < OPAL_CHANNEL_COUNT; i++)
+    {
+        channelUpdateAlg(self, &self->chan[i]);
+    }
+}
+
 static void opalTickTimer(Opal* self, int t)
 {
     if (!(self->timerControl & (1u << t)))
@@ -1030,10 +1044,10 @@ static void opalTickTimer(Opal* self, int t)
     if (++self->timerCount[t] > 0xFF)
     {
         self->timerCount[t] = self->timer[t];
+        self->status |= (uint8_t)(0x40 >> t);
         if (!(self->timerControl & (uint8_t)(0x40 >> t)))
         {
-            /* YMF262 status: bit 7 = IRQ, bit 6 = FT1, bit 5 = FT2. */
-            self->status |= (uint8_t)(0x80 | (0x40 >> t));
+            self->status |= 0x80;
         }
     }
 }
@@ -1107,8 +1121,7 @@ static void opalOutput(Opal* self, int16_t* left, int16_t* right)
     for (i = 0; i < OPAL_CHANNEL_COUNT; i++)
     {
         OpalChannel* chan = &self->chan[i];
-        int32_t accm = channelAccumOutput(self, chan);
-        int32_t cha = (int32_t)((int16_t)(accm & (int16_t)chan->cha));
+        int32_t cha = channelMix(self, chan, chan->cha);
         leftMix += (cha * chan->leftPan) >> 8;
     }
 
@@ -1125,8 +1138,7 @@ static void opalOutput(Opal* self, int16_t* left, int16_t* right)
     for (i = 0; i < OPAL_CHANNEL_COUNT; i++)
     {
         OpalChannel* chan = &self->chan[i];
-        int32_t accm = channelAccumOutput(self, chan);
-        int32_t chb = (int32_t)((int16_t)(accm & (int16_t)chan->chb));
+        int32_t chb = channelMix(self, chan, chan->chb);
         rightMix += (chb * chan->rightPan) >> 8;
     }
 
@@ -1215,6 +1227,7 @@ void opalInit(Opal* self, int sampleRate)
         op->freqMultTimes2 = 1;
         op->envelopeStage = OPAL_ENVELOPE_STAGE_RELEASE;
         op->envelopeLevel = 0x1FF;
+        op->egOut = 0x1FF;
         op->modSource = OPAL_OP_NONE;
     }
 
@@ -1223,8 +1236,6 @@ void opalInit(Opal* self, int sampleRate)
         OpalChannel* chan = &self->chan[i];
         chan->chanIndex = (uint8_t)i;
         chan->chanType = OPAL_CHANNEL_TYPE_2OP;
-        chan->cha = 0xFFFF;
-        chan->chb = 0xFFFF;
         chan->leftPan = 256;
         chan->rightPan = 256;
 
@@ -1325,6 +1336,12 @@ void opalFlushWriteBuf(Opal* self)
 
 void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val)
 {
+    if (!self->opl3Enabled && (regNum & 0x100) != 0 && (regNum & 0x1FF) != 0x105)
+    {
+        /* YMF262: NEW=0 ignores A1 except register 105h. */
+        regNum &= 0xFF;
+    }
+
     uint8_t high = (uint8_t)((regNum >> 8) & 1);
     uint8_t regm = (uint8_t)(regNum & 0xFF);
 
@@ -1351,7 +1368,12 @@ void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val)
                     }
                     case 0x05:
                     {
-                        self->opl3Enabled = (val & 1) != 0;
+                        bool enabled = (val & 1) != 0;
+                        if (self->opl3Enabled != enabled)
+                        {
+                            self->opl3Enabled = enabled;
+                            opalRefreshNew(self);
+                        }
                         break;
                     }
                 }
@@ -1383,12 +1405,13 @@ void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val)
                         }
                         else
                         {
+                            uint8_t prev = self->timerControl;
                             self->timerControl = val;
-                            if (val & 1)
+                            if ((val & 1) && !(prev & 1))
                             {
                                 self->timerCount[0] = self->timer[0];
                             }
-                            if (val & 2)
+                            if ((val & 2) && !(prev & 2))
                             {
                                 self->timerCount[1] = self->timer[1];
                             }
@@ -1471,10 +1494,6 @@ void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val)
             }
             OpalOperator* op = &self->op[18 * high + slot];
             op->waveform = (uint16_t)(val & 7);
-            if (!self->opl3Enabled)
-            {
-                op->waveform &= 0x03;
-            }
             break;
         }
         case 0xA0:
@@ -1513,9 +1532,9 @@ void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val)
     }
 }
 
-void opalPan(Opal* self, uint16_t regNum, uint8_t pan)
+void opalPan(Opal* self, uint16_t channel, uint8_t pan)
 {
-    uint16_t chanNum = (uint16_t)((regNum & 0xFF) + ((regNum & 0x100) ? 9 : 0));
+    uint16_t chanNum = (uint16_t)((channel & 0xFF) + ((channel & 0x100) ? 9 : 0));
     if (chanNum >= OPAL_CHANNEL_COUNT)
     {
         return;

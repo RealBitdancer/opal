@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-// DRO v1 decoder. See player_format.h.
-
 #include "format_dro.h"
 
 #include <stdlib.h>
@@ -16,19 +14,13 @@
 typedef struct
 {
     MusicSource base;
-    const uint8_t* data; // command stream, borrowed
+    const uint8_t* data;
     size_t size;
     size_t pos;
     uint32_t sampleRate;
-    uint16_t bank; // 0x000 or 0x100
+    uint16_t bank;
 } DroSource;
 
-// DRO commands:
-// 00 NN     delay (NN+1) ms
-// 01 LL HH  delay (LL|HH<<8)+1 ms
-// 02/03     select bank low/high
-// 04 RR VV  escaped write
-// RR VV     normal write (RR>=5)
 static uint64_t droStep(MusicSource* base, Opal* opl, bool* done)
 {
     DroSource* s = (DroSource*)base;
@@ -104,24 +96,32 @@ static void droFree(MusicSource* base)
 static MusicSource* droLoad(const char* path, const uint8_t* data, size_t size, uint32_t sampleRate, Opal* opl)
 {
     (void)path;
-    (void)opl; // the command stream programs the chip itself
+    (void)opl;
 
-    // Header "DBRAWOPL" + u16 ver0 + u32 len + u32 bytes + type + pad. Only v1 handled.
-    if (size < DRO_HEADER_SIZE || memcmp(data, "DBRAWOPL", 8) != 0 || readU16Le(data + 8) != 0)
+    // v1: low 16 bits of the version word are 0
+    if (size < DRO_HEADER_SIZE_EARLY || memcmp(data, "DBRAWOPL", 8) != 0 || readU16Le(data + 8) != 0)
     {
         return NULL;
     }
 
-    // The earliest DOSBox builds wrote a single-byte hardware type (21-byte header). Later v1
-    // files pad it to a u32. Early files carry command data where the padding would be, so
-    // nonzero "padding" identifies them (same heuristic as AdPlug).
-    size_t headerSize = DRO_HEADER_SIZE;
-    if ((readU32Le(data + 20) & 0xFFFFFF00u) != 0)
+    uint32_t lengthBytes = (size >= 20) ? readU32Le(data + 16) : 0;
+    size_t headerSize = DRO_HEADER_SIZE; // 21-byte early header vs 24-byte padded hardware field
+    if (lengthBytes > 0 && lengthBytes + DRO_HEADER_SIZE_EARLY == size)
     {
         headerSize = DRO_HEADER_SIZE_EARLY;
     }
-
-    uint32_t lengthBytes = readU32Le(data + 16);
+    else if (lengthBytes > 0 && lengthBytes + DRO_HEADER_SIZE == size)
+    {
+        headerSize = DRO_HEADER_SIZE;
+    }
+    else if (size < DRO_HEADER_SIZE)
+    {
+        headerSize = DRO_HEADER_SIZE_EARLY;
+    }
+    else if ((readU32Le(data + 20) & 0xFFFFFF00u) != 0)
+    {
+        headerSize = DRO_HEADER_SIZE_EARLY;
+    }
     size_t dataSize = size - headerSize;
     if (lengthBytes > 0 && lengthBytes <= dataSize)
     {

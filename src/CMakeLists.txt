@@ -25,6 +25,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE c_std_11)
+opal_strict_warnings(${PROJECT_NAME})
 
 install(TARGETS ${PROJECT_NAME}
     EXPORT opalTargets

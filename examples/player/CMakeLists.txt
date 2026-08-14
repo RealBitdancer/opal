@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
 # SPDX-License-Identifier: MIT
 
-# Player streams OPL music via opal and miniaudio. Formats live in format_*.c.
 add_executable(player
     src/player.c
     src/player_format.h
@@ -14,3 +13,7 @@ add_executable(player
 )
 target_link_libraries(player PRIVATE opal miniaudio)
 set_target_properties(player PROPERTIES FOLDER "examples")
+opal_strict_warnings(player)
+if(MSVC)
+    target_compile_definitions(player PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()

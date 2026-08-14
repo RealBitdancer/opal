@@ -8,7 +8,6 @@
 
 #include "player_format.h"
 
-// HSC (.hsc)
 extern const MusicFormat hscFormat;
 
 #endif // FORMAT_HSC_H_INCLUDED

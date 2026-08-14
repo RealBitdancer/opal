@@ -3,24 +3,17 @@
  * SPDX-License-Identifier: MIT
  */
 
-// HSC decoder (.hsc). OPL2 tracker at fixed 18.2 Hz tick. Replay follows documented HSC format.
-// Reference was AdPlug ChscPlayer. This code is independent. Uses opal in OPL2 mode.
-//
-// File: 128 instruments (1536 bytes), 51 byte order list, then 64x9 patterns of 2 bytes each.
-// No signature. Identified by extension.
-
 #include "format_hsc.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#define HSC_INSTR_BYTES (128 * 12)                           // 1536
-#define HSC_ORDER_BYTES 51                                   //
-#define HSC_HEADER_BYTES (HSC_INSTR_BYTES + HSC_ORDER_BYTES) // 1587
-#define HSC_PATTERN_BYTES (64 * 9 * 2)                       // 1152
+#define HSC_INSTR_BYTES (128 * 12)
+#define HSC_ORDER_BYTES 51
+#define HSC_HEADER_BYTES (HSC_INSTR_BYTES + HSC_ORDER_BYTES)
+#define HSC_PATTERN_BYTES (64 * 9 * 2)
 #define HSC_MAX_PATTERNS 50
 
-// Modulator operator register offset per OPL2 channel; F-numbers for the 12 semitones of an octave.
 static const uint8_t opTable[9] = {0x00, 0x01, 0x02, 0x08, 0x09, 0x0a, 0x10, 0x11, 0x12};
 static const uint16_t noteTable[12] = {363, 385, 408, 432, 458, 485, 514, 544, 577, 611, 647, 686};
 
@@ -35,15 +28,15 @@ typedef struct
 {
     MusicSource base;
     uint32_t sampleRate;
-    uint32_t frac; // fractional-frame carry for the 18.2 Hz (= 91/5) tick
+    uint32_t frac;
 
     uint8_t instr[128][12];
-    uint8_t song[128];       // order list (0..50 used; sized 128 to absorb goto targets)
-    const uint8_t* patterns; // borrowed from the file buffer
+    uint8_t song[128]; // 51-byte order list, 128 slots absorb goto targets
+    const uint8_t* patterns;
     int numPatterns;
 
     HscChannel channel[9];
-    uint8_t adlFreq[9]; // shadow of the OPL Bx (key/octave/freq-high) registers
+    uint8_t adlFreq[9];
     uint8_t pattpos, songpos, pattbreak, songend, mode6, bd, fadein;
     uint32_t speed, del;
 } HscSource;
@@ -93,7 +86,6 @@ static void hscSetInstr(HscSource* s, Opal* opl, uint8_t chan, uint8_t insnr)
     hscSetVolume(s, opl, chan, ins[2] & 63, ins[3] & 63);
 }
 
-// Play one pattern row (all 9 channels) of the given pattern at the current row position.
 static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
 {
     for (uint8_t chan = 0; chan < 9; chan++)
@@ -117,35 +109,35 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
 
         switch (effect & 0xf0)
         {
-            case 0x00: // global
+            case 0x00:
             {
                 switch (effOp)
                 {
                     case 1:
                     {
                         s->pattbreak++;
-                        break; // jump to next pattern
+                        break;
                     }
                     case 3:
                     {
                         s->fadein = 31;
-                        break; // fade in
+                        break;
                     }
                     case 5:
                     {
                         s->mode6 = 1;
-                        break; // 6-voice (percussion) mode on
+                        break;
                     }
                     case 6:
                     {
                         s->mode6 = 0;
-                        break; // 6-voice mode off
+                        break;
                     }
                 }
                 break;
             }
-            case 0x10: // manual slide up
-            case 0x20: // manual slide down
+            case 0x10:
+            case 0x20:
             {
                 if (effect & 0x10)
                 {
@@ -163,36 +155,34 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
                 }
                 break;
             }
-            case 0x50: // set percussion instrument (1 << x to OPL register 0xBD)
+            case 0x50: // 0-4: rhythm plus drum bit, 5: rhythm on, 6-7 unused
             {
                 if (effOp <= 4)
                 {
                     s->mode6 = 1;
                     s->bd = (uint8_t)(0x20 | (1u << effOp));
+                    opalWriteRegBuffered(opl, 0xbd, s->bd);
                 }
-                else if (effOp <= 7)
+                else if (effOp == 5)
                 {
-                    s->bd = (uint8_t)(1u << effOp);
-                    if (effOp == 5)
-                    {
-                        s->mode6 = 1;
-                    }
+                    s->mode6 = 1;
+                    s->bd = (uint8_t)(s->bd | 0x20);
+                    opalWriteRegBuffered(opl, 0xbd, s->bd);
                 }
-                opalWriteRegBuffered(opl, 0xbd, s->bd);
                 break;
             }
-            case 0x60: // set feedback
+            case 0x60:
             {
                 opalWriteRegBuffered(opl, (uint16_t)(0xc0 + chan), (uint8_t)((s->instr[s->channel[chan].inst][8] & 1) + (effOp << 1)));
                 break;
             }
-            case 0xa0: // set carrier volume
+            case 0xa0:
             {
                 uint8_t vol = (uint8_t)(effOp << 2);
                 opalWriteRegBuffered(opl, (uint16_t)(0x43 + opTable[chan]), (uint8_t)(vol | (s->instr[s->channel[chan].inst][2] & ~63)));
                 break;
             }
-            case 0xb0: // set modulator volume
+            case 0xb0:
             {
                 uint8_t vol = (uint8_t)(effOp << 2);
                 if (s->instr[inst][8] & 1)
@@ -205,7 +195,7 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
                 }
                 break;
             }
-            case 0xc0: // set instrument volume
+            case 0xc0:
             {
                 uint8_t db = (uint8_t)(effOp << 2);
                 opalWriteRegBuffered(opl, (uint16_t)(0x43 + opTable[chan]), (uint8_t)(db | (s->instr[s->channel[chan].inst][2] & ~63)));
@@ -215,14 +205,14 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
                 }
                 break;
             }
-            case 0xd0: // position jump
+            case 0xd0:
             {
                 s->pattbreak++;
                 s->songpos = effOp;
                 s->songend = 1;
                 break;
             }
-            case 0xf0: // set speed
+            case 0xf0:
             {
                 s->speed = effOp;
                 s->del = ++s->speed;
@@ -270,19 +260,19 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
                 {
                     opalWriteRegBuffered(opl, 0xbd, (uint8_t)(s->bd & ~16));
                     s->bd |= 48;
-                    break; // bass drum
+                    break;
                 }
                 case 7:
                 {
                     opalWriteRegBuffered(opl, 0xbd, (uint8_t)(s->bd & ~1));
                     s->bd |= 33;
-                    break; // hi-hat
+                    break;
                 }
                 case 8:
                 {
                     opalWriteRegBuffered(opl, 0xbd, (uint8_t)(s->bd & ~2));
                     s->bd |= 34;
-                    break; // cymbal
+                    break;
                 }
             }
             opalWriteRegBuffered(opl, 0xbd, s->bd);
@@ -290,7 +280,6 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattnr)
     }
 }
 
-// Process one 18.2 Hz tick. Returns false once the song has played through once.
 static bool hscUpdate(HscSource* s, Opal* opl)
 {
     s->del--;
@@ -358,7 +347,7 @@ static uint64_t hscStep(MusicSource* base, Opal* opl, bool* done)
         *done = true;
     }
 
-    // One 18.2 Hz tick = sampleRate * 5 / 91 frames, carrying the remainder so tempo does not drift.
+    // 18.2 Hz PIT tick: sampleRate * 5 / 91, remainder in frac
     uint64_t num = (uint64_t)s->sampleRate * 5 + s->frac;
     s->frac = (uint32_t)(num % 91);
     return num / 91;
@@ -426,12 +415,11 @@ static MusicSource* hscLoad(const char* path, const uint8_t* data, size_t size, 
         uint8_t v = data[HSC_INSTR_BYTES + i];
         if (((v & 0x7F) > 0x31) || ((v & 0x7F) >= numPatterns))
         {
-            v = 0xFF; // out of range: ends the song here
+            v = 0xFF; // 0xFF is the HSC end marker
         }
         s->song[i] = v;
     }
 
-    // HSC reset defaults.
     s->speed = 2;
     s->del = 1;
     for (uint8_t i = 0; i < 9; i++)
@@ -439,7 +427,6 @@ static MusicSource* hscLoad(const char* path, const uint8_t* data, size_t size, 
         s->channel[i].inst = i;
     }
 
-    // Enable waveform select and load default instruments.
     opalWriteRegBuffered(opl, 0x01, 0x20);
     opalWriteRegBuffered(opl, 0x08, 0x80);
     opalWriteRegBuffered(opl, 0xBD, 0x00);

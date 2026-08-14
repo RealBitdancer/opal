@@ -2,6 +2,53 @@
 
 All notable changes to this project are documented here.
 
+## [2.0.2] - 2026-08-13
+
+### Added
+
+- `OPAL_VERSION_MAJOR`, `OPAL_VERSION_MINOR`, `OPAL_VERSION_PATCH`, and the packed
+  `OPAL_VERSION` (`major * 10000 + minor * 100 + patch`) in `opal.h`, so a consumer can
+  test the release at compile time without going through CMake.
+
+### Fixed
+
+- The DRO v1 loader required a 24-byte file even for the 21-byte early DOSBox header.
+  Length versus file size now picks 21 or 24 bytes, with the old padding test as a
+  fallback. HSC effect `5x` no longer writes OPL AM or vibrato depth for nibbles 6 and 7.
+- Disabling 4-op mode no longer clears the primary channel's `pairIndex`. That field is
+  the physical partner (or `OPAL_CH_NONE` for channels that cannot pair). `chanType` says
+  whether 4-op is active. `opalInit` now sets `egOut` to 0x1FF so a snapshot before the
+  first sample is silent, matching `envelopeLevel`. The example player and web loader use
+  the native OPL rate if the audio device reports a zero sample rate.
+- NEW (register 105h bit 0) was stored and then ignored. Bank 1 writes still took
+  effect while it was clear, channels 9-17 still mixed, and C0 stereo bits written in
+  OPL2 mode were forced to both speakers and discarded. The YMF262 ignores A1 except
+  for 105h itself. The extra channels stay silent. CHA and CHB are stored as written
+  and apply only after NEW is set. Waveforms 4-7 stay stored and play as 0-3 while NEW
+  is clear. Four-operator pairs wire as two-operator until NEW comes back. C0 resets to
+  zero, so enabling OPL3 without writing C0 is silent.
+- A masked timer overflow left FT1 and FT2 clear. Code that polls the flags and ignores
+  IRQ never saw the tick. Overflow now always sets the timer flag. IRQ (bit 7) is set
+  only when that timer is unmasked. Writing register 4 with ST1 or ST2 already set also
+  reloaded the counter. The load is the 0 to 1 edge, so a mask-only write no longer
+  restarts a running timer.
+
+### Changed
+
+- `opalPan` names its channel argument `channel`. It is still a channel index 0 to 17,
+  or 0 to 8 with bit 8 set for the second bank.
+
+### Documentation
+
+- README treats NEW as a live mode bit. Bank 1, waveforms 4-7, CHA/CHB, and
+  four-operator pairing apply only while it is set.
+- The README `find_package` example asks for 2.0, which is what `SameMajorVersion`
+  actually accepts from this release. IMF type 0 versus type 1 is listed with the other
+  player limits. `OPAL_ENVELOPE_STAGE_OFF` is documented as unused by the core. Bindings
+  listed in BINDINGS.md are opal-zig and opal-rust at `2.0.2-1`. Security support is 2.x
+  and current main. GitHub Actions use `actions/checkout@v7`. The Android matrix includes
+  x86. First-party targets compile with warnings as errors.
+
 ## [2.0.1] - 2026-07-25
 
 ### Fixed

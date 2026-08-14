@@ -18,9 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        abi: [arm64-v8a, armeabi-v7a, x86_64]
+        abi: [arm64-v8a, armeabi-v7a, x86_64, x86]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build

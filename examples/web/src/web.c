@@ -3,9 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-// WebAssembly demo front-end for the opal player. Streams OPL music to Web Audio through
-// miniaudio's Emscripten backend.
-
 #include "opal/opal.h"
 #include "miniaudio/miniaudio.h"
 
@@ -107,7 +104,7 @@ static bool ensureDevice(void)
         ma_device_config config = ma_device_config_init(ma_device_type_playback);
         config.playback.format = ma_format_s16;
         config.playback.channels = 2;
-        config.sampleRate = 0;
+        config.sampleRate = 0; // 0 = device native rate
         config.dataCallback = dataCallback;
         if (ma_device_init(NULL, &config, &device) != MA_SUCCESS)
         {
@@ -155,11 +152,16 @@ int webLoad(const char* name, const uint8_t* data, int size)
     }
     memcpy(song.data, data, (size_t)size);
 
-    opalInit(&song.opl, (int)device.sampleRate);
+    uint32_t sampleRate = device.sampleRate;
+    if (sampleRate == 0)
+    {
+        sampleRate = OPAL_OPL3_SAMPLE_RATE;
+    }
+    opalInit(&song.opl, (int)sampleRate);
 
     for (size_t i = 0; i < sizeof formats / sizeof formats[0]; ++i)
     {
-        song.source = formats[i]->load(name, song.data, (size_t)size, device.sampleRate, &song.opl);
+        song.source = formats[i]->load(name, song.data, (size_t)size, sampleRate, &song.opl);
         if (song.source != NULL)
         {
             break;
@@ -171,8 +173,9 @@ int webLoad(const char* name, const uint8_t* data, int size)
         return 0;
     }
 
-    song.tail = framesForMs(device.sampleRate, TAIL_MS);
+    song.tail = framesForMs(sampleRate, TAIL_MS);
 
+    // Opening writes must land before the first sample.
     bool done = false;
     song.wait = song.source->step(song.source, &song.opl, &done);
     song.ended = done;
@@ -205,7 +208,7 @@ int webFinished(void)
 
 static uint8_t levelFromOp(const OpalOperator* op)
 {
-    if (op == NULL || op->envelopeStage == OPAL_ENVELOPE_STAGE_OFF)
+    if (op == NULL)
     {
         return 0;
     }

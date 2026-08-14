@@ -3,9 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-// Interface between player core and per format decoders. Each format in its format_*.c exposes
-// a MusicFormat. Core probes in order and drives the winner.
-
 #ifndef PLAYER_FORMAT_H_INCLUDED
 #define PLAYER_FORMAT_H_INCLUDED
 
@@ -19,14 +16,12 @@ typedef struct MusicSource MusicSource;
 
 struct MusicSource
 {
-    // Apply due writes to opl. Return output frames until next event. 0 with *done=0 means step again now.
-    // Set *done true at song end.
+    // frames until next event. 0 and !*done means step again
     uint64_t (*step)(MusicSource* self, Opal* opl, bool* done);
     void (*free)(MusicSource* self);
 };
 
-// Return heap MusicSource if this format matches path+data, else NULL. Borrows data. opl is fresh and
-// may be preprogrammed here.
+// NULL if unmatched. Borrows data. May program opl.
 typedef MusicSource* (*MusicLoadFn)(const char* path, const uint8_t* data, size_t size, uint32_t sampleRate, Opal* opl);
 
 typedef struct

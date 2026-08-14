@@ -27,19 +27,22 @@ here is a C11 port derived from the OpenMPT copy and wrapped in a small C API.
 
 Feature-complete means the full register set that affects audio. The core implements two-
 and four-operator FM, all eight waveforms, the tremolo and vibrato LFOs, percussion mode
-with its noise generator, and the timers with their status register. CSW mode is decoded
-and then left inert. The real YMF262 ignores it, so opal ignores it with equal care. The
-OPL2 waveform select enable bit receives the same treatment, because the YMF262 ignores
-that one too.
+with its noise generator, and the timers with their status register. Register 08 bit 7
+(CSW on the YM3812) is unused on the YMF262, and opal leaves it unused. The OPL2 waveform
+select enable bit is stored and ignored, because the YMF262 ignores that one too. NEW
+(register 105h bit 0) is live: while it is clear the chip is in OPL2 compatibility mode,
+so the second register array is ignored (except 105h itself), channels 9-17 stay silent,
+waveforms 4-7 fold to 0-3, CHA/CHB force both speakers, and four-operator pairing is
+decoded as two-operator.
 
 ## Accuracy
 
-Stereo output matches established YMF262 emulators, including
-[Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3), sample for sample at the chip's
-native rate of 49716 Hz. Waveforms, envelopes, LFOs, rhythm mode, two- and four-operator
-FM, feedback, stereo routing, and buffered register timing all follow hardware behavior.
-The right channel arrives one sample after the left because the YMF262 pipeline delays
-it. Reproducing the quirk is cheaper than explaining its absence.
+The operator, envelope, LFO, rhythm, feedback, and slot pipeline match
+[Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3) at the chip's native 49716 Hz.
+Compatibility mode (NEW clear) follows the real YMF262: bank 1 is inert except register
+105h, channels 9-17 stay silent, waveforms 4-7 fold to 0-3, and CHA/CHB force both
+speakers. The right channel arrives one sample after the left because the YMF262
+pipeline delays it. Reproducing the quirk is cheaper than explaining its absence.
 
 ## Building
 
@@ -68,13 +71,15 @@ To install and consume opal from another CMake project:
 
     cmake --install build/msvc-x64 --prefix /path/to/prefix
     # In your CMakeLists.txt:
-    # find_package(opal 1.0 REQUIRED)
+    # find_package(opal 2.0 REQUIRED)
     # target_link_libraries(myapp PRIVATE opal::opal)
 
 ## Usage
 
-The public interface is eight functions, declared in `include/opal/opal.h`. Drive it the
-way you would drive the real chip. Write registers, then read back stereo samples at
+The public interface is eight functions, declared in `include/opal/opal.h`. The same
+header defines `OPAL_VERSION_MAJOR`, `OPAL_VERSION_MINOR`, `OPAL_VERSION_PATCH`, and
+the packed `OPAL_VERSION` (`major * 10000 + minor * 100 + patch`). Drive the chip the
+way you would drive the real one. Write registers, then read back stereo samples at
 whatever rate you asked for.
 
 ```c
@@ -113,12 +118,14 @@ player song.imf
 player --rate 700 song.wlf
 ```
 
-A few limitations are worth knowing. DRO files must be version 1, meaning the header word
-at offset 8 is zero. Both the usual 24-byte v1 header and the early DOSBox 21-byte form
-(single-byte hardware type, no padding) are accepted. HSC has no signature, so the player
-goes by the `.hsc` extension. IMF and WLF are also recognized by extension, and the replay
-rate defaults to 560 Hz for `.imf` and 700 Hz for `.wlf`. That rate is a property of the
-game rather than of the file, so the `--rate` flag exists for the exceptions.
+A few limitations are worth knowing. DRO files must be version 1, meaning the low 16 bits
+of the version word at offset 8 are zero. Both the usual 24-byte v1 header and the early
+DOSBox 21-byte form (single-byte hardware type, no padding) are accepted. HSC has no
+signature, so the player goes by the `.hsc` extension. IMF and WLF are also recognized by
+extension, and the replay rate defaults to 560 Hz for `.imf` and 700 Hz for `.wlf`. That
+rate is a property of the game rather than of the file, so the `--rate` flag exists for
+the exceptions. A type-1 IMF starts with a nonzero 16-bit length. A type-0 file whose
+first command is not `00 00` is therefore read as type 1.
 
 The player core is format-agnostic. Each format sits behind the small interface in
 `player_format.h`, and support for a new one is a single `format_*.c` away.

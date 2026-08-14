@@ -8,7 +8,6 @@
 
 #include "player_format.h"
 
-// DOSBox Raw OPL v1 ("DBRAWOPL")
 extern const MusicFormat droFormat;
 
 #endif // FORMAT_DRO_H_INCLUDED

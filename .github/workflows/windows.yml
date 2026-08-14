@@ -45,7 +45,7 @@ jobs:
             mingw-path: C:\msys64\mingw32\bin
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install MinGW-w64 toolchain
         if: matrix.msystem != ''

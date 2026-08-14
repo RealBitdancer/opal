@@ -4,7 +4,6 @@
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Shared code used by examples. Audio backend etc.
 add_subdirectory(common/miniaudio)
 
 if(EMSCRIPTEN)

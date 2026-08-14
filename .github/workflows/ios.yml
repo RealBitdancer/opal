@@ -24,7 +24,7 @@ jobs:
           - name: simulator
             sysroot: iphonesimulator
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install ninja
         run: brew install ninja

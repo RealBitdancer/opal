@@ -3,14 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-// IMF decoder. Raw OPL2 register log from id and Apogee titles. Body is 4 byte units:
-// reg, val, u16 delay (LE) after the write.
-//
-// Type 0: raw to EOF, often starts with reg 0x00=0x00.
-// Type 1: prefixed by u16 length. Nonzero first word marks it.
-//
-// Rate is not in the file. Chosen by extension: .wlf 700 Hz, .imf 560 Hz. See player_format.h.
-
 #include "format_imf.h"
 
 #include <stdlib.h>
@@ -19,16 +11,16 @@
 typedef struct
 {
     MusicSource base;
-    const uint8_t* data; // command stream (reg, val, u16 delay) units, borrowed from the file buffer
+    const uint8_t* data;
     size_t size;
     size_t pos;
     uint32_t sampleRate;
-    uint32_t rate; // IMF tick rate in Hz (280 / 560 / 700)
-    uint32_t frac; // fractional-frame carry so delays do not drift
+    uint32_t rate;
+    uint32_t frac;
 } ImfSource;
 
-static uint32_t g_rateOverride; // 0 = pick by extension; otherwise force this rate (Hz)
-static uint32_t g_lastRate;     // rate the most recent imfLoad settled on, for the caller to report
+static uint32_t g_rateOverride;
+static uint32_t g_lastRate;
 
 void imfSetRate(uint32_t hz)
 {
@@ -58,10 +50,9 @@ static uint64_t imfStep(MusicSource* base, Opal* opl, bool* done)
     opalWriteRegBuffered(opl, reg, val);
     if (delay == 0)
     {
-        return 0; // more writes now, caller steps again
+        return 0;
     }
 
-    // ticks at s->rate to frames. Carry frac so tempo holds.
     uint64_t num = (uint64_t)delay * s->sampleRate + s->frac;
     s->frac = (uint32_t)(num % s->rate);
     return num / s->rate;
@@ -72,7 +63,6 @@ static void imfFree(MusicSource* base)
     free(base);
 }
 
-// 560 Hz for .imf, 700 Hz for .wlf, 0 if the extension is neither (IMF has no signature to probe).
 static uint32_t imfRateForExt(const char* path)
 {
     size_t n = strlen(path);
@@ -96,9 +86,8 @@ static uint32_t imfRateForExt(const char* path)
 
 static MusicSource* imfLoad(const char* path, const uint8_t* data, size_t size, uint32_t sampleRate, Opal* opl)
 {
-    (void)opl; // the command stream programs the chip itself
+    (void)opl;
 
-    // Extension gate first. Override only affects replay rate of recognized files.
     uint32_t rate = imfRateForExt(path);
     if (rate == 0 || size < 4)
     {
@@ -110,8 +99,7 @@ static MusicSource* imfLoad(const char* path, const uint8_t* data, size_t size, 
     }
     g_lastRate = rate;
 
-    // Nonzero first word: type1 length prefix. Clamp to avail, drop trailing tags.
-    // Zero first word: type0, whole file is stream.
+    // Nonzero first word is a type-1 length prefix.
     const uint8_t* stream = data;
     size_t streamSize = size;
     uint16_t lenWord = readU16Le(data);

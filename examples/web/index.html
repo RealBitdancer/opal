@@ -241,7 +241,6 @@
     mod.ccall("webLevels", null, ["number", "number"], [levelsPtr, CHAN_COUNT]);
     const levels = mod.HEAPU8.subarray(levelsPtr, levelsPtr + CHAN_COUNT);
     for (let i = 0; i < CHAN_COUNT; i++) {
-      // 0..255 envelope amplitude → bar height. Floor a tiny lit segment while silent stays 0.
       const pct = levels[i] === 0 ? 0 : Math.max(4, Math.round((levels[i] * 100) / 255));
       meterBars[i].style.height = pct + "%";
     }

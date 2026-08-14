@@ -3,12 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-// Streams OPL music through opal to the default audio device. Each format lives in its
-// own format_*.c behind the MusicFormat interface. Supported: DRO, HSC, IMF.
-//
-// Usage:
-//     player [--rate <hz>] <song>
-
 #include "opal/opal.h"
 #include "miniaudio/miniaudio.h"
 
@@ -23,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAIL_MS 250 // tail after song end so releases ring out
+#define TAIL_MS 250
 
 static const MusicFormat* const formats[] = {&droFormat, &hscFormat, &imfFormat};
 
@@ -38,7 +32,6 @@ typedef struct
     ma_event finished;
 } Player;
 
-// Audio thread callback.
 static void dataCallback(ma_device* device, void* output, const void* input, ma_uint32 frameCount)
 {
     Player* p = (Player*)device->pUserData;
@@ -66,7 +59,7 @@ static void dataCallback(ma_device* device, void* output, const void* input, ma_
             opalSample(&p->opl, &left, &right);
             --p->wait;
         }
-        else if (p->tail > 0) // tail: keep sampling for releases
+        else if (p->tail > 0)
         {
             opalSample(&p->opl, &left, &right);
             --p->tail;
@@ -199,15 +192,14 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    imfSetRate(rateOverride); // 0 uses ext default for IMF. Other formats ignore.
+    imfSetRate(rateOverride);
 
-    // Must outlive device init. Used in pUserData.
     Player player = {0};
 
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_s16;
     config.playback.channels = 2;
-    config.sampleRate = 0; // 0 = the device's native rate; opal resamples its 49716 Hz output to match
+    config.sampleRate = 0; // 0 = device native rate
     config.dataCallback = dataCallback;
     config.pUserData = &player;
 
@@ -219,13 +211,17 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    opalInit(&player.opl, (int)device.sampleRate);
+    uint32_t sampleRate = device.sampleRate;
+    if (sampleRate == 0)
+    {
+        sampleRate = OPAL_OPL3_SAMPLE_RATE;
+    }
+    opalInit(&player.opl, (int)sampleRate);
 
-    // Probe formats in order. First match wins. A format may program the chip here.
     const MusicFormat* format = NULL;
     for (size_t i = 0; i < sizeof formats / sizeof formats[0]; ++i)
     {
-        player.source = formats[i]->load(songPath, file, fileSize, device.sampleRate, &player.opl);
+        player.source = formats[i]->load(songPath, file, fileSize, sampleRate, &player.opl);
         if (player.source != NULL)
         {
             format = formats[i];
@@ -240,9 +236,9 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    player.tail = framesForMs(device.sampleRate, TAIL_MS);
+    player.tail = framesForMs(sampleRate, TAIL_MS);
 
-    // Prime first event. Opening writes must land before first sample.
+    // Opening writes must land before the first sample.
     {
         bool primedDone = false;
         player.wait = player.source->step(player.source, &player.opl, &primedDone);
@@ -262,7 +258,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    printf("player: %s | %s | %u Hz\n", songPath, format->name, device.sampleRate);
+    printf("player: %s | %s | %u Hz\n", songPath, format->name, sampleRate);
     if (format == &imfFormat)
     {
         printf("player: IMF replay rate %u Hz (%s)\n", imfRate(), rateOverride ? "forced" : "by extension");
@@ -281,7 +277,7 @@ int main(int argc, char** argv)
 
     ma_event_wait(&player.finished);
 
-    ma_device_uninit(&device); // stop device and join thread before freeing referenced data
+    ma_device_uninit(&device); // join the audio thread before freeing pUserData
     opalFlushWriteBuf(&player.opl);
     ma_event_uninit(&player.finished);
     player.source->free(player.source);

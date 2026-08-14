@@ -1,8 +1,6 @@
 # Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
 # SPDX-License-Identifier: MIT
 
-# WebAssembly demo of the opal player. Builds only under Emscripten.
-
 set(PLAYER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../player/src)
 
 add_executable(player_web
@@ -13,6 +11,7 @@ add_executable(player_web
 )
 target_include_directories(player_web PRIVATE ${PLAYER_SRC})
 target_link_libraries(player_web PRIVATE opal miniaudio)
+opal_strict_warnings(player_web)
 
 set_target_properties(player_web PROPERTIES
     OUTPUT_NAME player

@@ -9,7 +9,7 @@ bundles a few third-party components listed below. They carry their own licenses
 - **Original core:** Shayde / Reality (Reality Adlib Tracker 2). Public domain per [PUBLIC_DOMAIN_PROOF.txt](PUBLIC_DOMAIN_PROOF.txt).
 - **This port:** Copyright (c) 2026 Bitdancer. C11 from OpenMPT `soundlib/opal.h`. C API,
   resampler, pan, rhythm, timers, OPL2 waveform select, and accuracy work. MIT. See LICENSE.
-- **Lookup tables** (`LogSinTable`, `ExpTable`): numeric values from decapped Yamaha OPL2/OPL3 chip
+- **Lookup tables** (`logSinTable`, `expTable`): numeric values from decapped Yamaha OPL2/OPL3 chip
   ROM. They are hardware constants, not original expressive code. The same values appear in many
   emulators (MAME, Nuked-OPL3, ymfm, etc.) because they come from the silicon.
 - **Accuracy:** stereo output matches the YMF262 reference behavior used by established emulators

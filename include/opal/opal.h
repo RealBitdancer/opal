@@ -8,8 +8,9 @@
     C11 port, C API, resampling, and pan by Bitdancer. See LICENSE and THIRD_PARTY_LICENSES.md.
 
     Covers full OPL2/OPL3. Stereo output matches YMF262 reference behavior. 2/4 op FM, 8
-    waveforms, LFOs, rhythm, timers, status via opalReadStatus. CSW inert as on real YMF262. Bank 1
-    always accessible.
+    waveforms, LFOs, rhythm, timers, status via opalReadStatus. Register 08 bit 7 is unused on
+    the YMF262, as on the real chip. Bank 1, four-operator pairing, waveforms 4-7, and CHA/CHB
+    take effect only while NEW (register 105h bit 0) is set.
 
     The Opal struct holds no pointers: all internal references are indices, so an instance is
     a plain value. Copy, memcpy, or relocate it freely. A copy is a complete save state.
@@ -31,6 +32,12 @@ typedef struct OpalOperator OpalOperator;
 typedef struct Opal Opal;
 
 // clang-format off
+#define OPAL_VERSION_MAJOR 2
+#define OPAL_VERSION_MINOR 0
+#define OPAL_VERSION_PATCH 2
+
+#define OPAL_VERSION ((OPAL_VERSION_MAJOR) * 10000 + (OPAL_VERSION_MINOR) * 100 + (OPAL_VERSION_PATCH))
+
 /* Various constants */
 #define OPAL_OPL3_SAMPLE_RATE 49716
 #define OPAL_CHANNEL_COUNT    18
@@ -45,7 +52,7 @@ typedef struct Opal Opal;
 #define OPAL_CH_NONE        0xFF    /* no paired channel */
 
 /* OpalOperator::envelopeStage values */
-#define OPAL_ENVELOPE_STAGE_OFF     (-1)
+#define OPAL_ENVELOPE_STAGE_OFF     (-1) /* never written by the core */
 #define OPAL_ENVELOPE_STAGE_ATTACK  0
 #define OPAL_ENVELOPE_STAGE_DECAY   1
 #define OPAL_ENVELOPE_STAGE_SUSTAIN 2
@@ -77,7 +84,9 @@ typedef struct OpalWriteBuf
     and Opal::chan, so a copied instance is fully self-contained.
 
     Fields useful for visualizers:
-        envelopeStage   an OPAL_ENVELOPE_STAGE_* value: OFF, ATTACK, DECAY, SUSTAIN, RELEASE
+        envelopeStage   ATTACK, DECAY, SUSTAIN, or RELEASE. OPAL_ENVELOPE_STAGE_OFF is defined
+                        for visualizers. The core never writes it: idle operators sit in RELEASE
+                        with egOut >= 511
         egOut           current total attenuation (envelope + output level + KSL + tremolo) in
                         0.1875 dB steps where 0 is loudest and >= 511 is silence
         key             nonzero while keyed on (bit 0 = normal key on, bit 1 = rhythm key on)
@@ -118,10 +127,10 @@ struct OpalOperator
     A single channel, which can contain two or more operators.
 
     opSlot[] holds the indices of the channel's operators in Opal::op (OPAL_OP_NONE when absent).
-    pairIndex is the partner channel in 4-op mode (OPAL_CH_NONE when unpaired). outSource[] lists
-    up to four operator indices whose out values sum into the channel output, describing the
-    active FM algorithm routing. chanType is an OPAL_CHANNEL_TYPE_* value naming the channel's
-    current role.
+    pairIndex is the physical 4-op partner (0+3, 1+4, 2+5 and the same on bank 1). Init pre-wires
+    those pairs. Channels that cannot pair (6-8, 15-17) use OPAL_CH_NONE. Whether 4-op is active
+    is chanType, not pairIndex. outSource[] lists up to four operator indices whose out values
+    sum into the channel output, describing the active FM algorithm routing.
 */
 struct OpalChannel
 {
@@ -239,10 +248,10 @@ void opalFlushWriteBuf(Opal* self);
 /*!
  * \brief Set panning level per channel
  * \param self Pointer to the Opal instance
- * \param regNum Channel index 0 to 17, or 0 to 8 with bit 8 set for the second bank
+ * \param channel Channel index 0 to 17, or 0 to 8 with bit 8 set for the second bank
  * \param pan Panning level (0 left, 64 middle, 127 right)
  */
-void opalPan(Opal* self, uint16_t regNum, uint8_t pan);
+void opalPan(Opal* self, uint16_t channel, uint8_t pan);
 
 /*!
  * \brief Generate one stereo 16-bit PCM sample (writes two integers)
