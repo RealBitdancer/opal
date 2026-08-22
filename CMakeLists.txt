@@ -7,7 +7,7 @@ cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 # Keep in lockstep with OPAL_VERSION_* in include/opal/opal.h
-project(opal VERSION 2.0.2 LANGUAGES C)
+project(opal VERSION 2.0.3 LANGUAGES C)
 
 include(GNUInstallDirs)
 

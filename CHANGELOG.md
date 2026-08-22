@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented here.
 
+## [2.0.3] - 2026-08-22
+
+The synthesis core is the same as 2.0.2. This release is the example player and the web
+demo. `OPAL_VERSION_PATCH` is 3 so the tag, the CMake package, and the header agree.
+
+### Fixed
+
+- HSC replay in `format_hsc.c` followed AdPlug's ChscPlayer. It now follows HSC-Tracker
+  HSCOBJ 1.4 / HSCPLAY. Unmatched effects including `0x3n`, `0x5n`, `0x6n`, and `0xDn`
+  set speed to `n + 1`. OPL register 08 is written `0x40` (NOTESEL), not `0x80` (CSW).
+  Notes pack fnum, block, and key-on into one 16-bit word on A0/B0. `0x1n`/`0x2n` slide
+  that word's low byte by `n + 1` with no carry into the block. `0xAn`/`0xBn`/`0xCn`
+  replace the level byte and drop the instrument KSL bits. An instrument-set with slide
+  0 leaves the key off. Setting the same patch again is a no-op, so the channel is not
+  keyed off. Out-of-range pattern indexes play empty rows. The 51st order slot is played.
+  The KSL xor applies to the carrier always, and to the modulator only in additive mode.
+  Instrument slide is the high nibble of byte 11.
+- DRO register writes and IMF delay 0 return zero frames from `step`. The example player
+  and the web callback then spun in `while (wait == 0)` on the audio thread. Each callback
+  now caps consecutive zero-wait steps and yields, so a register dump cannot hang playback.
+
+### Changed
+
+- An HSC order jump or end marker is a loop point, not the end of playback. The example
+  CLI player keeps the same file going, so tracks such as Rocky Margarine run until you
+  stop them. The web demo treats that edge as the end of the current file and starts the
+  next track, wrapping the list, until Stop. DRO and IMF still end when the stream runs
+  out.
+
+### Documentation
+
+- README points at sehnsucht as the full-featured terminal player that uses the opal
+  emulator, not the example C formats. The web demo plays the bundled tracks in order.
+  Language bindings stay at `2.0.2-1`, because the C API did not change.
+
 ## [2.0.2] - 2026-08-13
 
 ### Added

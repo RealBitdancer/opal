@@ -32,8 +32,9 @@ Public Domain. You are free to use, modify, and redistribute these seven files.
 
 ## Playing
 
-The player identifies HSC files by their `.hsc` extension. Point it at any track (quote the
-path since the names contain spaces):
+The player identifies HSC files by their `.hsc` extension. Tracks loop at an order jump
+or end marker, as they do in HSCPLAY. Point it at any track (quote the path since the
+names contain spaces):
 
     player "music/01 Shoot 'em up.hsc"
 

@@ -136,6 +136,7 @@ static MusicSource* droLoad(const char* path, const uint8_t* data, size_t size, 
 
     s->base.step = droStep;
     s->base.free = droFree;
+    s->base.loop = false;
     s->data = data + headerSize;
     s->size = dataSize;
     s->sampleRate = sampleRate;

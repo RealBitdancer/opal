@@ -127,8 +127,16 @@ rate is a property of the game rather than of the file, so the `--rate` flag exi
 the exceptions. A type-1 IMF starts with a nonzero 16-bit length. A type-0 file whose
 first command is not `00 00` is therefore read as type 1.
 
+HSC playback follows HSC-Tracker HSCOBJ 1.4 / HSCPLAY, not AdPlug. Modules loop at an
+order jump or end marker. Stop the player with Ctrl+C. DRO and IMF still end when the
+stream runs out.
+
 The player core is format-agnostic. Each format sits behind the small interface in
 `player_format.h`, and support for a new one is a single `format_*.c` away.
+
+A full-featured terminal player that uses the opal emulator lives in
+[sehnsucht](https://github.com/RealBitdancer/sehnsucht). It has playlists, a tracker
+view, and more formats than the bundled example.
 
 ### Demo music
 
@@ -146,9 +154,10 @@ Point the player at any of them and quote the path, since the names contain spac
 
 The `examples/web` directory wraps the same core and the same format decoders into a
 WebAssembly build with a browser front end, styled after the trackers this music was
-written in. The `web` preset builds it into player.js and player.wasm, and a GitHub
-Actions workflow deploys it together with the demo tracks to GitHub Pages on every push
-to main. The live copy is at
+written in. The demo plays the bundled tracks one after another and wraps the list.
+A click starts at that track. Stop ends playback. The `web` preset builds it
+into player.js and player.wasm, and a GitHub Actions workflow deploys it together with
+the demo tracks to GitHub Pages on every push to main. The live copy is at
 [realbitdancer.github.io/opal](https://realbitdancer.github.io/opal/).
 
 ## Coding style

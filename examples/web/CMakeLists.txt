@@ -23,6 +23,6 @@ target_link_options(player_web PRIVATE
     "-sEXPORT_NAME=createPlayer"
     "-sALLOW_MEMORY_GROWTH=1"
     "-sENVIRONMENT=web"
-    "-sEXPORTED_FUNCTIONS=_webInit,_webLoad,_webStop,_webFinished,_webLevels,_malloc,_free"
+    "-sEXPORTED_FUNCTIONS=_webInit,_webLoad,_webStop,_webFinished,_webLooping,_webSongEnd,_webLevels,_malloc,_free"
     "-sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8"
 )

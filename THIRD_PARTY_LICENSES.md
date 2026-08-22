@@ -23,7 +23,8 @@ Copyright David Reid (https://miniaud.io). Dual public domain or MIT-0. Bundled 
 
 ## HSC decoder (`examples/player/src/format_hsc.c`)
 
-Original MIT code. Listed for attribution only. HSC logic follows the format. Uses AdPlug ChscPlayer (LGPL) as reference only. No AdPlug code copied.
+Independent MIT code. Playback follows HSC-Tracker HSCOBJ 1.4 / HSCPLAY.
+No AdPlug source and no HSCOBJ binary is included.
 
 ## Demo music (`music/*.hsc`)
 

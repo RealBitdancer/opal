@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define STEP_STALL_LIMIT 1024
+
 typedef struct MusicSource MusicSource;
 
 struct MusicSource
@@ -19,6 +21,7 @@ struct MusicSource
     // frames until next event. 0 and !*done means step again
     uint64_t (*step)(MusicSource* self, Opal* opl, bool* done);
     void (*free)(MusicSource* self);
+    bool loop;
 };
 
 // NULL if unmatched. Borrows data. May program opl.

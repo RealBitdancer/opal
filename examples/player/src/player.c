@@ -38,6 +38,7 @@ static void dataCallback(ma_device* device, void* output, const void* input, ma_
     int16_t* out = (int16_t*)output;
     (void)input;
 
+    uint32_t zeroSteps = 0;
     for (ma_uint32 i = 0; i < frameCount; ++i)
     {
         int16_t left = 0;
@@ -46,11 +47,24 @@ static void dataCallback(ma_device* device, void* output, const void* input, ma_
         while (p->wait == 0 && !p->ended)
         {
             bool done = false;
-            p->wait += p->source->step(p->source, &p->opl, &done);
-            if (done)
+            uint64_t n = p->source->step(p->source, &p->opl, &done);
+            p->wait += n;
+            if (done && !p->source->loop)
             {
                 p->ended = true;
                 opalFlushWriteBuf(&p->opl);
+            }
+            if (n == 0)
+            {
+                zeroSteps += 1;
+                if (zeroSteps > STEP_STALL_LIMIT)
+                {
+                    p->wait = (uint64_t)(frameCount - i);
+                }
+            }
+            else
+            {
+                zeroSteps = 0;
             }
         }
 
@@ -242,8 +256,8 @@ int main(int argc, char** argv)
     {
         bool primedDone = false;
         player.wait = player.source->step(player.source, &player.opl, &primedDone);
-        player.ended = primedDone;
-        if (primedDone)
+        player.ended = primedDone && !player.source->loop;
+        if (player.ended)
         {
             opalFlushWriteBuf(&player.opl);
         }
@@ -263,7 +277,7 @@ int main(int argc, char** argv)
     {
         printf("player: IMF replay rate %u Hz (%s)\n", imfRate(), rateOverride ? "forced" : "by extension");
     }
-    printf("player: playing... (Ctrl+C to stop)\n");
+    printf("player: %s... (Ctrl+C to stop)\n", player.source->loop ? "looping" : "playing");
 
     if (ma_device_start(&device) != MA_SUCCESS)
     {

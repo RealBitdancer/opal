@@ -118,6 +118,7 @@ static MusicSource* imfLoad(const char* path, const uint8_t* data, size_t size, 
 
     s->base.step = imfStep;
     s->base.free = imfFree;
+    s->base.loop = false;
     s->data = stream;
     s->size = streamSize;
     s->sampleRate = sampleRate;

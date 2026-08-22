@@ -11,6 +11,7 @@ wrote one, or know of one that is missing, send a pull request and it will be ad
 | [opal-rust](https://github.com/RealBitdancer/opal-rust) | 2.0.2-1         | [Rust](https://www.rust-lang.org) | MIT     |
 
 Binding versions are the bound opal release plus a packaging revision, so `2.0.2-1` is
-the first binding release for opal `2.0.2`.
+the first binding release for opal `2.0.2`. opal 2.0.3 did not change the C API, so those
+revisions still apply.
 
 Bindings usually follow the naming convention `opal-{language}`.

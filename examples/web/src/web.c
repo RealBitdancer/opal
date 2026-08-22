@@ -30,6 +30,7 @@ typedef struct
     uint64_t wait;
     uint64_t tail;
     bool ended;
+    bool complete;
 } Song;
 
 static ma_device device;
@@ -41,6 +42,7 @@ static bool songReady;
 static void render(void* output, ma_uint32 frameCount)
 {
     int16_t* out = (int16_t*)output;
+    uint32_t zeroSteps = 0;
     for (ma_uint32 i = 0; i < frameCount; ++i)
     {
         int16_t left = 0;
@@ -49,11 +51,28 @@ static void render(void* output, ma_uint32 frameCount)
         while (song.wait == 0 && !song.ended)
         {
             bool done = false;
-            song.wait += song.source->step(song.source, &song.opl, &done);
+            uint64_t n = song.source->step(song.source, &song.opl, &done);
+            song.wait += n;
             if (done)
             {
-                song.ended = true;
-                opalFlushWriteBuf(&song.opl);
+                song.complete = true;
+                if (!song.source->loop)
+                {
+                    song.ended = true;
+                    opalFlushWriteBuf(&song.opl);
+                }
+            }
+            if (n == 0)
+            {
+                zeroSteps += 1;
+                if (zeroSteps > STEP_STALL_LIMIT)
+                {
+                    song.wait = (uint64_t)(frameCount - i);
+                }
+            }
+            else
+            {
+                zeroSteps = 0;
             }
         }
 
@@ -178,8 +197,9 @@ int webLoad(const char* name, const uint8_t* data, int size)
     // Opening writes must land before the first sample.
     bool done = false;
     song.wait = song.source->step(song.source, &song.opl, &done);
-    song.ended = done;
-    if (done)
+    song.ended = done && !song.source->loop;
+    song.complete = false;
+    if (song.ended)
     {
         opalFlushWriteBuf(&song.opl);
     }
@@ -204,6 +224,23 @@ EMSCRIPTEN_KEEPALIVE
 int webFinished(void)
 {
     return (songReady && song.ended && song.wait == 0 && song.tail == 0) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int webLooping(void)
+{
+    return (songReady && song.source != NULL && song.source->loop) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int webSongEnd(void)
+{
+    if (!songReady || !song.complete)
+    {
+        return 0;
+    }
+    song.complete = false;
+    return 1;
 }
 
 static uint8_t levelFromOp(const OpalOperator* op)

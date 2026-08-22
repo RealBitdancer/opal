@@ -34,7 +34,7 @@ typedef struct Opal Opal;
 // clang-format off
 #define OPAL_VERSION_MAJOR 2
 #define OPAL_VERSION_MINOR 0
-#define OPAL_VERSION_PATCH 2
+#define OPAL_VERSION_PATCH 3
 
 #define OPAL_VERSION ((OPAL_VERSION_MAJOR) * 10000 + (OPAL_VERSION_MINOR) * 100 + (OPAL_VERSION_PATCH))
 
