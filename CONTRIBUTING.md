@@ -36,13 +36,12 @@ it will be asked to leave.
 
 Naming is uniform across the tree. Types are PascalCase (`OpalChannel`, `MusicSource`),
 functions are camelCase with an `opal` prefix in the core's public API (`opalWriteReg`),
-struct members are camelCase, and macros are SCREAMING_CASE. The core once kept its
-public-domain upstream names as an exception. It no longer does, so do not add new ones.
+struct members are camelCase, and macros are SCREAMING_CASE.
 
 ## Licensing
 
 The project's own code is MIT and your contributions are accepted under the same terms. The
-emulation core's public-domain provenance and the bundled third-party components are
-documented in THIRD_PARTY_LICENSES.md. Do not add dependencies with copyleft obligations,
-and do not add music without provenance. The `music/` folder is picky about that for good
+bundled third-party components are documented in THIRD_PARTY_LICENSES.md. Do not copy or
+translate code from other emulators or players, and do not add dependencies with copyleft
+obligations or music without provenance. The `music/` folder is picky about that for good
 reason, as music/PUBLIC_DOMAIN_PROOF.txt explains.

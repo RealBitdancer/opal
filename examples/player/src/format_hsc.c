@@ -5,36 +5,97 @@
 
 #include "format_hsc.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define HSC_CHANNELS 9
-#define HSC_INSTR_COUNT 128
-#define HSC_INSTR_SIZE 12
-#define HSC_INSTR_BYTES (HSC_INSTR_COUNT * HSC_INSTR_SIZE)
+#define HSC_PATCH_COUNT 128
+#define HSC_RECORD_BYTES 12
+#define HSC_BANK_BYTES (HSC_PATCH_COUNT * HSC_RECORD_BYTES)
 #define HSC_ORDER_LEN 51
-#define HSC_HEADER_BYTES (HSC_INSTR_BYTES + HSC_ORDER_LEN)
+#define HSC_HEADER_BYTES (HSC_BANK_BYTES + HSC_ORDER_LEN)
 #define HSC_ROWS 64
 #define HSC_PATTERN_BYTES (HSC_ROWS * HSC_CHANNELS * 2)
 #define HSC_MAX_PATTERNS 50
 #define HSC_MAX_FILE_BYTES (HSC_HEADER_BYTES + HSC_MAX_PATTERNS * HSC_PATTERN_BYTES + 1)
 #define HSC_KEY_ON 0x2000
 #define HSC_NOTE_OFF 0x7f
-#define HSC_SET_INS 0x80
+#define HSC_SET_PATCH 0x80
+#define HSC_BREAK 0x01
 #define HSC_END 0xff
 #define HSC_JUMP 0x80
 #define HSC_JUMP_LIMIT 0x31
-#define HSC_LEVEL_MASK 63
-
-static const uint8_t opTable[HSC_CHANNELS] = {0x00, 0x01, 0x02, 0x08, 0x09, 0x0a, 0x10, 0x11, 0x12};
-static const uint16_t noteFnum[12] = {363, 385, 408, 432, 458, 485, 514, 544, 577, 611, 647, 686};
+#define HSC_ADDITIVE 0x01
+#define HSC_TL_MASK 0x3f
+#define HSC_KSL_SHIFT 6
+#define HSC_LEVEL_REG 0x40
+#define HSC_CARRIER_OFFSET 3
+#define HSC_NO_PATCH 0xff
+#define HSC_START_TICKS 2
+#define HSC_CMD_SLIDE_UP 0x1
+#define HSC_CMD_SLIDE_DOWN 0x2
+#define HSC_CMD_CARRIER_LEVEL 0xa
+#define HSC_CMD_MODULATOR_LEVEL 0xb
+#define HSC_CMD_VOICE_LEVEL 0xc
 
 typedef struct
 {
-    uint8_t inst;
-    uint16_t freq;
-    bool dirty;
-} HscChannel;
+    uint8_t carrier;
+    uint8_t modulator;
+} HscOperatorPair;
+
+typedef struct
+{
+    HscOperatorPair character;
+    HscOperatorPair level;
+    HscOperatorPair attackDecay;
+    HscOperatorPair sustainRelease;
+    HscOperatorPair waveform;
+    uint8_t connection;
+    uint8_t fineTune;
+} HscPatch;
+
+typedef struct
+{
+    uint8_t regBase;
+    size_t member;
+} HscOperatorRow;
+
+typedef enum
+{
+    HSC_MODULATOR_NEVER,
+    HSC_MODULATOR_ALWAYS,
+    HSC_MODULATOR_IF_ADDITIVE
+} HscModulatorTarget;
+
+typedef struct
+{
+    bool carrier;
+    HscModulatorTarget modulator;
+} HscLevelCommand;
+
+static const uint8_t operatorBase[HSC_CHANNELS] = {0x00, 0x01, 0x02, 0x08, 0x09, 0x0a, 0x10, 0x11, 0x12};
+static const uint16_t noteFnum[12] = {363, 385, 408, 432, 458, 485, 514, 544, 577, 611, 647, 686};
+static const uint8_t kslFromFile[4] = {0, 3, 2, 1};
+
+static const HscOperatorRow operatorRows[] = {
+    {0x20, offsetof(HscPatch, character)}, {0x60, offsetof(HscPatch, attackDecay)},    {0x80, offsetof(HscPatch, sustainRelease)},
+    {0xe0, offsetof(HscPatch, waveform)},  {HSC_LEVEL_REG, offsetof(HscPatch, level)},
+};
+
+static const HscLevelCommand levelCommands[] = {
+    {true, HSC_MODULATOR_NEVER},
+    {false, HSC_MODULATOR_ALWAYS},
+    {true, HSC_MODULATOR_IF_ADDITIVE},
+};
+
+typedef struct
+{
+    uint8_t patchIndex;
+    uint16_t freqWord;
+    bool freqPending;
+} HscVoice;
 
 typedef struct
 {
@@ -43,24 +104,24 @@ typedef struct
     uint32_t frac;
     const uint8_t* data;
     size_t dataSize;
-    uint8_t instr[HSC_INSTR_COUNT][HSC_INSTR_SIZE];
-    HscChannel channel[HSC_CHANNELS];
+    HscPatch patches[HSC_PATCH_COUNT];
+    HscVoice voices[HSC_CHANNELS];
     uint8_t row;
     uint8_t orderPos;
-    bool patternBreak;
-    bool songEnd;
-    uint32_t speed;
-    uint32_t delay;
+    bool breakPending;
+    bool wrapped;
+    uint32_t ticksPerRow;
+    uint32_t ticksRemaining;
 } HscSource;
 
 static uint16_t hscNoteWord(uint8_t n)
 {
-    return (uint16_t)(noteFnum[n % 12] + ((uint16_t)(n / 12) << 10) + HSC_KEY_ON);
+    return (uint16_t)(noteFnum[n % 12] + ((unsigned)(n / 12) << 10) + HSC_KEY_ON);
 }
 
 static uint8_t hscOrderByte(const HscSource* s, uint8_t slot)
 {
-    size_t idx = HSC_INSTR_BYTES + (size_t)slot;
+    size_t idx = HSC_BANK_BYTES + (size_t)slot;
     if (idx >= s->dataSize)
     {
         return HSC_END;
@@ -78,125 +139,171 @@ static const uint8_t* hscCell(const HscSource* s, uint8_t pattern, uint8_t row, 
     return s->data + off;
 }
 
-static bool hscAdditive(const uint8_t* ins)
+static uint16_t hscOperatorReg(uint8_t regBase, uint8_t chan, bool carrier)
 {
-    return (ins[8] & 1) != 0;
+    return (uint16_t)(regBase + operatorBase[chan] + (carrier ? HSC_CARRIER_OFFSET : 0));
+}
+
+static uint8_t hscNormalizeKsl(uint8_t level)
+{
+    return (uint8_t)((kslFromFile[level >> HSC_KSL_SHIFT] << HSC_KSL_SHIFT) | (level & HSC_TL_MASK));
+}
+
+static HscOperatorPair hscPair(uint8_t carrier, uint8_t modulator)
+{
+    HscOperatorPair pair;
+    pair.carrier = carrier;
+    pair.modulator = modulator;
+    return pair;
+}
+
+static bool hscAdditive(const HscPatch* patch)
+{
+    return (patch->connection & HSC_ADDITIVE) != 0;
+}
+
+static void hscDecodePatch(HscPatch* patch, const uint8_t* record)
+{
+    patch->connection = record[8];
+    uint8_t modulatorLevel = record[3];
+    if (hscAdditive(patch))
+    {
+        modulatorLevel = hscNormalizeKsl(modulatorLevel);
+    }
+    patch->character = hscPair(record[0], record[1]);
+    patch->level = hscPair(hscNormalizeKsl(record[2]), modulatorLevel);
+    patch->attackDecay = hscPair(record[4], record[5]);
+    patch->sustainRelease = hscPair(record[6], record[7]);
+    patch->waveform = hscPair(record[9], record[10]);
+    patch->fineTune = (uint8_t)(record[11] >> 4);
+}
+
+static const HscOperatorPair* hscPatchPair(const HscPatch* patch, size_t member)
+{
+    return (const HscOperatorPair*)((const uint8_t*)patch + member);
+}
+
+static const HscPatch* hscVoicePatch(const HscSource* s, uint8_t chan)
+{
+    return &s->patches[s->voices[chan].patchIndex & (HSC_PATCH_COUNT - 1)];
+}
+
+static void hscSelectPatch(HscSource* s, Opal* opl, uint8_t chan, uint8_t index)
+{
+    HscVoice* voice = &s->voices[chan];
+    if (index >= HSC_PATCH_COUNT || voice->patchIndex == index)
+    {
+        return;
+    }
+    voice->patchIndex = index;
+    const HscPatch* patch = &s->patches[index];
+
+    opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), 0);
+    opalWriteRegBuffered(opl, (uint16_t)(0xc0 + chan), patch->connection);
+    for (size_t i = 0; i < sizeof operatorRows / sizeof operatorRows[0]; i++)
+    {
+        const HscOperatorRow* row = &operatorRows[i];
+        const HscOperatorPair* pair = hscPatchPair(patch, row->member);
+        opalWriteRegBuffered(opl, hscOperatorReg(row->regBase, chan, true), pair->carrier);
+        opalWriteRegBuffered(opl, hscOperatorReg(row->regBase, chan, false), pair->modulator);
+    }
 }
 
 static void hscWriteFreq(HscSource* s, Opal* opl, uint8_t chan)
 {
-    const uint8_t* ins = s->instr[s->channel[chan].inst & (HSC_INSTR_COUNT - 1)];
-    if (ins[11] == 0 && !s->channel[chan].dirty)
+    HscVoice* voice = &s->voices[chan];
+    const HscPatch* patch = hscVoicePatch(s, chan);
+    if (patch->fineTune == 0 && !voice->freqPending)
     {
         return;
     }
-    s->channel[chan].dirty = false;
-    uint8_t lo = (uint8_t)s->channel[chan].freq;
-    uint8_t b0 = (uint8_t)(s->channel[chan].freq >> 8);
-    opalWriteRegBuffered(opl, (uint16_t)(0xa0 + chan), (uint8_t)(lo + ins[11]));
+    voice->freqPending = false;
+    uint8_t lo = (uint8_t)voice->freqWord;
+    uint8_t b0 = (uint8_t)(voice->freqWord >> 8);
+    opalWriteRegBuffered(opl, (uint16_t)(0xa0 + chan), (uint8_t)(lo + patch->fineTune));
     opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), b0);
 }
 
-static void hscSlideFreq(HscSource* s, uint8_t chan, uint8_t delta, bool up)
+static void hscSlidePitch(HscVoice* voice, int direction, uint8_t param)
 {
-    uint8_t lo = (uint8_t)s->channel[chan].freq;
-    if (up)
-    {
-        lo = (uint8_t)(lo + delta);
-    }
-    else
-    {
-        lo = (uint8_t)(lo - delta);
-    }
-    s->channel[chan].freq = (uint16_t)((s->channel[chan].freq & 0xff00) | lo);
-    s->channel[chan].dirty = true;
-}
-
-static void hscSetVolume(HscSource* s, Opal* opl, uint8_t chan, uint8_t volc, uint8_t volm)
-{
-    const uint8_t* ins = s->instr[s->channel[chan].inst & (HSC_INSTR_COUNT - 1)];
-    uint8_t op = opTable[chan];
-    opalWriteRegBuffered(opl, (uint16_t)(0x43 + op), (uint8_t)(volc | (ins[2] & ~HSC_LEVEL_MASK)));
-    if (hscAdditive(ins))
-    {
-        opalWriteRegBuffered(opl, (uint16_t)(0x40 + op), (uint8_t)(volm | (ins[3] & ~HSC_LEVEL_MASK)));
-    }
-    else
-    {
-        opalWriteRegBuffered(opl, (uint16_t)(0x40 + op), ins[3]);
-    }
-}
-
-static void hscSetInstr(HscSource* s, Opal* opl, uint8_t chan, uint8_t index)
-{
-    if (index >= HSC_INSTR_COUNT)
-    {
-        return;
-    }
-    if (s->channel[chan].inst == index)
-    {
-        return;
-    }
-    const uint8_t* ins = s->instr[index];
-    uint8_t op = opTable[chan];
-    s->channel[chan].inst = index;
-    opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), 0);
-    opalWriteRegBuffered(opl, (uint16_t)(0xc0 + chan), ins[8]);
-    opalWriteRegBuffered(opl, (uint16_t)(0x23 + op), ins[0]);
-    opalWriteRegBuffered(opl, (uint16_t)(0x20 + op), ins[1]);
-    opalWriteRegBuffered(opl, (uint16_t)(0x63 + op), ins[4]);
-    opalWriteRegBuffered(opl, (uint16_t)(0x60 + op), ins[5]);
-    opalWriteRegBuffered(opl, (uint16_t)(0x83 + op), ins[6]);
-    opalWriteRegBuffered(opl, (uint16_t)(0x80 + op), ins[7]);
-    opalWriteRegBuffered(opl, (uint16_t)(0xe3 + op), ins[9]);
-    opalWriteRegBuffered(opl, (uint16_t)(0xe0 + op), ins[10]);
-    hscSetVolume(s, opl, chan, (uint8_t)(ins[2] & HSC_LEVEL_MASK), (uint8_t)(ins[3] & HSC_LEVEL_MASK));
-}
-
-static void hscSetSpeed(HscSource* s, uint8_t nibble)
-{
-    s->speed = (uint32_t)nibble + 1;
-    s->delay = s->speed;
+    uint8_t lo = (uint8_t)((voice->freqWord & 0xff) + direction * ((int)param + 1));
+    voice->freqWord = (uint16_t)((voice->freqWord & 0xff00) | lo);
+    voice->freqPending = true;
 }
 
 static void hscPlayNote(HscSource* s, Opal* opl, uint8_t chan, uint8_t note)
 {
+    HscVoice* voice = &s->voices[chan];
     if (note == HSC_NOTE_OFF)
     {
-        s->channel[chan].freq = (uint16_t)(s->channel[chan].freq & ~HSC_KEY_ON);
-        s->channel[chan].dirty = true;
+        voice->freqWord = (uint16_t)(voice->freqWord & ~HSC_KEY_ON);
+        voice->freqPending = true;
         return;
     }
     uint8_t n = (uint8_t)(note - 1);
     opalWriteRegBuffered(opl, (uint16_t)(0xb0 + chan), 0);
-    s->channel[chan].freq = hscNoteWord(n);
-    s->channel[chan].dirty = true;
+    voice->freqWord = hscNoteWord(n);
+    voice->freqPending = true;
 }
 
-static void hscResolveJump(HscSource* s)
+static void hscSetLevel(HscSource* s, Opal* opl, uint8_t chan, const HscLevelCommand* command, uint8_t level)
 {
-    uint8_t v = hscOrderByte(s, s->orderPos);
-    if ((v & HSC_JUMP) == 0)
+    bool toModulator = command->modulator == HSC_MODULATOR_ALWAYS || (command->modulator == HSC_MODULATOR_IF_ADDITIVE && hscAdditive(hscVoicePatch(s, chan)));
+    if (command->carrier)
     {
-        return;
+        opalWriteRegBuffered(opl, hscOperatorReg(HSC_LEVEL_REG, chan, true), level);
     }
-    uint8_t dest = (v == HSC_END) ? 0 : (uint8_t)(v - HSC_JUMP);
-    if (dest >= HSC_JUMP_LIMIT)
+    if (toModulator)
     {
-        dest = 0;
+        opalWriteRegBuffered(opl, hscOperatorReg(HSC_LEVEL_REG, chan, false), level);
     }
-    s->orderPos = dest;
-    s->songEnd = true;
+}
+
+static void hscApplyEffect(HscSource* s, Opal* opl, uint8_t chan, uint8_t effect)
+{
+    uint8_t command = (uint8_t)(effect >> 4);
+    uint8_t param = (uint8_t)(effect & 0x0f);
+    switch (command)
+    {
+        case HSC_CMD_SLIDE_UP:
+        {
+            hscSlidePitch(&s->voices[chan], 1, param);
+            break;
+        }
+        case HSC_CMD_SLIDE_DOWN:
+        {
+            hscSlidePitch(&s->voices[chan], -1, param);
+            break;
+        }
+        case HSC_CMD_CARRIER_LEVEL:
+        case HSC_CMD_MODULATOR_LEVEL:
+        case HSC_CMD_VOICE_LEVEL:
+        {
+            hscSetLevel(s, opl, chan, &levelCommands[command - HSC_CMD_CARRIER_LEVEL], (uint8_t)(param << 2));
+            break;
+        }
+        default:
+        {
+            s->ticksPerRow = (uint32_t)param + 1;
+            break;
+        }
+    }
 }
 
 static void hscAdvanceOrder(HscSource* s)
 {
     uint8_t prev = s->orderPos;
     s->orderPos++;
-    hscResolveJump(s);
+    uint8_t v = hscOrderByte(s, s->orderPos);
+    if ((v & HSC_JUMP) != 0)
+    {
+        uint8_t dest = (v == HSC_END) ? 0 : (uint8_t)(v - HSC_JUMP);
+        s->orderPos = (dest < HSC_JUMP_LIMIT) ? dest : 0;
+        s->wrapped = true;
+    }
     if (prev < HSC_ORDER_LEN && s->orderPos >= HSC_ORDER_LEN)
     {
-        s->songEnd = true;
+        s->wrapped = true;
     }
 }
 
@@ -212,9 +319,9 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattern)
         uint8_t note = cell[0];
         uint8_t effect = cell[1];
 
-        if (note == HSC_SET_INS)
+        if (note == HSC_SET_PATCH)
         {
-            hscSetInstr(s, opl, chan, (uint8_t)(effect & (HSC_INSTR_COUNT - 1)));
+            hscSelectPatch(s, opl, chan, (uint8_t)(effect & (HSC_PATCH_COUNT - 1)));
             continue;
         }
 
@@ -227,48 +334,12 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattern)
         {
             continue;
         }
-        if (effect == 0x01)
+        if (effect == HSC_BREAK)
         {
-            s->patternBreak = true;
+            s->breakPending = true;
             continue;
         }
-
-        uint8_t effOp = (uint8_t)(effect & 0x0f);
-        const uint8_t* ins = s->instr[s->channel[chan].inst & (HSC_INSTR_COUNT - 1)];
-        switch (effect & 0xf0)
-        {
-            case 0x10:
-            case 0x20:
-            {
-                hscSlideFreq(s, chan, (uint8_t)(effOp + 1), (effect & 0x10) != 0);
-                break;
-            }
-            case 0xa0:
-            {
-                opalWriteRegBuffered(opl, (uint16_t)(0x43 + opTable[chan]), (uint8_t)(effOp << 2));
-                break;
-            }
-            case 0xb0:
-            {
-                opalWriteRegBuffered(opl, (uint16_t)(0x40 + opTable[chan]), (uint8_t)(effOp << 2));
-                break;
-            }
-            case 0xc0:
-            {
-                uint8_t db = (uint8_t)(effOp << 2);
-                opalWriteRegBuffered(opl, (uint16_t)(0x43 + opTable[chan]), db);
-                if (hscAdditive(ins))
-                {
-                    opalWriteRegBuffered(opl, (uint16_t)(0x40 + opTable[chan]), db);
-                }
-                break;
-            }
-            default:
-            {
-                hscSetSpeed(s, effOp);
-                break;
-            }
-        }
+        hscApplyEffect(s, opl, chan, effect);
     }
 
     for (uint8_t chan = 0; chan < HSC_CHANNELS; chan++)
@@ -277,49 +348,66 @@ static void hscPlayRow(HscSource* s, Opal* opl, uint8_t pattern)
     }
 }
 
-static bool hscUpdate(HscSource* s, Opal* opl)
+static void hscUpdate(HscSource* s, Opal* opl)
 {
-    s->delay--;
-    if (s->delay != 0)
+    s->ticksRemaining--;
+    if (s->ticksRemaining != 0)
     {
-        return !s->songEnd;
+        return;
     }
 
     uint8_t pattern = hscOrderByte(s, s->orderPos);
     hscPlayRow(s, opl, pattern);
 
-    s->delay = s->speed;
-    if (s->patternBreak)
+    s->ticksRemaining = s->ticksPerRow;
+    s->row++;
+    if (s->breakPending || s->row >= HSC_ROWS)
     {
         s->row = 0;
-        s->patternBreak = false;
+        s->breakPending = false;
         hscAdvanceOrder(s);
     }
-    else
-    {
-        s->row++;
-        if (s->row == HSC_ROWS)
-        {
-            s->row = 0;
-            hscAdvanceOrder(s);
-        }
-    }
-    return !s->songEnd;
 }
 
 static uint64_t hscStep(MusicSource* base, Opal* opl, bool* done)
 {
     HscSource* s = (HscSource*)base;
-    if (!hscUpdate(s, opl))
+    if (s->wrapped && s->ticksRemaining == 1)
     {
+        s->wrapped = false;
         *done = true;
-        s->songEnd = false;
+        return 0;
     }
+    hscUpdate(s, opl);
 
     // 18.2 Hz PIT tick: sampleRate * 5 / 91, remainder in frac
     uint64_t num = (uint64_t)s->sampleRate * 5 + s->frac;
     s->frac = (uint32_t)(num % 91);
     return num / 91;
+}
+
+static void hscStart(HscSource* s, Opal* opl)
+{
+    for (size_t k = 0; k < HSC_PATCH_COUNT; k++)
+    {
+        hscDecodePatch(&s->patches[k], s->data + k * HSC_RECORD_BYTES);
+    }
+
+    s->ticksPerRow = HSC_START_TICKS;
+    s->ticksRemaining = 1;
+    for (uint8_t chan = 0; chan < HSC_CHANNELS; chan++)
+    {
+        s->voices[chan].patchIndex = HSC_NO_PATCH;
+    }
+
+    opalWriteRegBuffered(opl, 0x01, 0x20);
+    opalWriteRegBuffered(opl, 0x08, 0x40);
+    opalWriteRegBuffered(opl, 0xbd, 0x00);
+    for (uint8_t chan = 0; chan < HSC_CHANNELS; chan++)
+    {
+        hscSelectPatch(s, opl, chan, chan);
+    }
+    opalFlushWriteBuf(opl);
 }
 
 static void hscFree(MusicSource* base)
@@ -361,34 +449,7 @@ static MusicSource* hscLoad(const char* path, const uint8_t* data, size_t size, 
     s->sampleRate = sampleRate != 0 ? sampleRate : (uint32_t)OPAL_OPL3_SAMPLE_RATE;
     s->data = data;
     s->dataSize = size;
-
-    memcpy(s->instr, data, HSC_INSTR_BYTES);
-    for (int i = 0; i < HSC_INSTR_COUNT; i++)
-    {
-        s->instr[i][2] ^= (uint8_t)((s->instr[i][2] & 0x40) << 1);
-        if (hscAdditive(s->instr[i]))
-        {
-            s->instr[i][3] ^= (uint8_t)((s->instr[i][3] & 0x40) << 1);
-        }
-        s->instr[i][11] >>= 4;
-    }
-
-    s->speed = 2;
-    s->delay = 1;
-    for (uint8_t i = 0; i < HSC_CHANNELS; i++)
-    {
-        s->channel[i].inst = 0xFF;
-    }
-
-    opalWriteRegBuffered(opl, 0x01, 0x20);
-    opalWriteRegBuffered(opl, 0x08, 0x40);
-    opalWriteRegBuffered(opl, 0xBD, 0x00);
-    for (uint8_t i = 0; i < HSC_CHANNELS; i++)
-    {
-        hscSetInstr(s, opl, i, i);
-    }
-
-    opalFlushWriteBuf(opl);
+    hscStart(s, opl);
 
     return &s->base;
 }

@@ -5,6 +5,7 @@
 | Version | Supported |
 | ------- | --------- |
 | latest main | yes |
+| 3.x releases | yes |
 | 2.x releases | yes |
 | 1.x releases | no |
 | anything older | no |

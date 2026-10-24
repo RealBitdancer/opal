@@ -32,6 +32,7 @@ BraceWrapping:
   BeforeElse: true
   IndentBraces: false
   AfterExternBlock: false
+InsertBraces: true
 BreakBeforeBinaryOperators: None
 
 # Arguable but IMHO pointer is part of the type

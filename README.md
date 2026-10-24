@@ -7,8 +7,8 @@
 [![iOS](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/RealBitdancer/opal/actions/workflows/ios.yml)
 [![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://realbitdancer.github.io/opal/?play=1)
 
-A feature-complete OPL2 and OPL3 FM synthesis core in C11 with a small API and a
-permissive license.
+A feature-complete YMF262 (OPL3) FM synthesis core in C11, with OPL2 compatibility
+mode, a small API, and a permissive license.
 
 **Want to hear it?** Try the [live web demo](https://realbitdancer.github.io/opal/?play=1). It runs in
 your browser as WebAssembly, no build needed.
@@ -19,30 +19,31 @@ your browser as WebAssembly, no build needed.
 
 ## About
 
-opal emulates the Yamaha YMF262, better known as the OPL3, together with its OPL2
-predecessor. These are the chips that powered the AdLib and Sound Blaster cards, and
-through them most of the music in DOS games and trackers. The core was written by Shayde
-of Reality for Reality Adlib Tracker 2 and released into the public domain. What you find
-here is a C11 port derived from the OpenMPT copy and wrapped in a small C API.
+opal emulates the Yamaha YMF262, better known as the OPL3, including the OPL2 compatibility
+mode that runs YM3812 software. These are the chips that powered the AdLib and Sound
+Blaster cards, and through them most of the music in DOS games and trackers. The name and
+the output resampler come from Opal, the public-domain emulator Shayde of Reality wrote
+for Reality Adlib Tracker 2. Everything else is written from scratch.
 
 Feature-complete means the full register set that affects audio. The core implements two-
 and four-operator FM, all eight waveforms, the tremolo and vibrato LFOs, percussion mode
 with its noise generator, and the timers with their status register. Register 08 bit 7
 (CSW on the YM3812) is unused on the YMF262, and opal leaves it unused. The OPL2 waveform
 select enable bit is stored and ignored, because the YMF262 ignores that one too. NEW
-(register 105h bit 0) is live: while it is clear the chip is in OPL2 compatibility mode,
-so the second register array is ignored (except 105h itself), channels 9-17 stay silent,
-waveforms 4-7 fold to 0-3, CHA/CHB force both speakers, and four-operator pairing is
-decoded as two-operator.
+(register 105h bit 0) is live: while it is clear, writes to the second register array land
+in the first (except 105h itself), waveforms are limited to 0-3, and C0h writes turn on
+both speakers. Changing NEW does not touch anything already set. All 18 channels keep
+playing, and four-operator pairs follow register 104h alone.
 
 ## Accuracy
 
 The operator, envelope, LFO, rhythm, feedback, and slot pipeline match
-[Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3) at the chip's native 49716 Hz.
-Compatibility mode (NEW clear) follows the real YMF262: bank 1 is inert except register
-105h, channels 9-17 stay silent, waveforms 4-7 fold to 0-3, and CHA/CHB force both
-speakers. The right channel arrives one sample after the left because the YMF262
-pipeline delays it. Reproducing the quirk is cheaper than explaining its absence.
+[Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3) sample for sample at the chip's native
+49716 Hz. One known difference: Nuked-OPL3 recomputes the key scale number of channels 3-5
+and 12-14 on every 104h write, and opal does not. Compatibility mode (NEW clear) follows
+the real YMF262, as described above. The right channel arrives one sample after the left
+because the YMF262 pipeline delays it. Reproducing the quirk is cheaper than explaining
+its absence.
 
 ## Building
 
@@ -67,11 +68,13 @@ preset needs the NDK and `ANDROID_NDK_HOME`, and `ios` needs a macOS host. Both 
 library alone. The `web` preset needs an active Emscripten SDK and builds the browser
 player described below.
 
-To install and consume opal from another CMake project:
+To install and consume opal from another CMake project, build the configuration you want
+and install that one:
 
-    cmake --install build/msvc-x64 --prefix /path/to/prefix
+    cmake --build --preset release
+    cmake --install build/msvc-x64 --config Release --prefix /path/to/prefix
     # In your CMakeLists.txt:
-    # find_package(opal 2.0 REQUIRED)
+    # find_package(opal 3.0 REQUIRED)
     # target_link_libraries(myapp PRIVATE opal::opal)
 
 ## Usage
@@ -100,8 +103,8 @@ from the moment it was taken.
 
 Internally the chip always runs at its native 49716 Hz and resamples to the rate passed
 to `opalInit` or `opalSetSampleRate`. `opalWriteReg` writes a register on the current
-sample. `opalWriteRegBuffered` queues writes spaced a few chip samples apart for more
-accurate timing. `opalFlushWriteBuf` applies any queue at once. `opalPan` adds
+sample. `opalWriteRegBuffered` queues writes two chip samples apart. That spacing is an emulator
+convention, not the chip's bus timing. `opalFlushWriteBuf` applies any queue at once. `opalPan` adds
 per-channel panning on top of the chip's own left and right enables (channel index 0 to
 17, or 0 to 8 with bit 8 set for the second bank). `opalReadStatus` returns the status
 register, which timer polling code will want.
@@ -120,7 +123,10 @@ player --rate 700 song.wlf
 
 A few limitations are worth knowing. DRO files must be version 1, meaning the low 16 bits
 of the version word at offset 8 are zero. Both the usual 24-byte v1 header and the early
-DOSBox 21-byte form (single-byte hardware type, no padding) are accepted. HSC has no
+DOSBox 21-byte form (single-byte hardware type, no padding) are accepted. DOSBox writes
+registers 00h-04h and 104h without the format's escape and opens each capture with a
+register dump. The player detects both. A few unusual files can still be misread. Dual
+OPL2 captures play in OPL3 mode with both chips on both speakers. HSC has no
 signature, so the player goes by the `.hsc` extension. IMF and WLF are also recognized by
 extension, and the replay rate defaults to 560 Hz for `.imf` and 700 Hz for `.wlf`. That
 rate is a property of the game rather than of the file, so the `--rate` flag exists for
@@ -173,10 +179,10 @@ source's names for upstream diffability. Consistency won. The full rules are in
 
 ## License
 
-The project's own code is MIT, which covers the C API, the resampler, the pan helper, the
-example player, and the build system. See [LICENSE](LICENSE). The Opal emulation core is
-public domain, courtesy of Shayde of Reality. miniaudio is public domain or MIT-0 at your
-option. Nothing in the library depends on LGPL code.
+The project's own code is MIT, which covers the emulation core, the C API, the example
+player, and the build system. See [LICENSE](LICENSE). The output resampler follows Shayde
+of Reality's public-domain Opal. miniaudio is public domain or MIT-0 at your option.
+Nothing in the library depends on LGPL code.
 
 Full attribution and the provenance of the ROM tables are in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Release history is in

@@ -26,6 +26,7 @@ typedef struct
     Opal opl;
     MusicSource* source;
     uint64_t wait;
+    uint64_t lag;
     uint64_t tail;
     bool ended;
     bool signaled;
@@ -38,33 +39,27 @@ static void dataCallback(ma_device* device, void* output, const void* input, ma_
     int16_t* out = (int16_t*)output;
     (void)input;
 
-    uint32_t zeroSteps = 0;
+    uint32_t stalledSteps = 0;
     for (ma_uint32 i = 0; i < frameCount; ++i)
     {
         int16_t left = 0;
         int16_t right = 0;
 
-        while (p->wait == 0 && !p->ended)
+        while (p->wait == 0 && !p->ended && stalledSteps < STEP_STALL_LIMIT)
         {
             bool done = false;
             uint64_t n = p->source->step(p->source, &p->opl, &done);
-            p->wait += n;
             if (done && !p->source->loop)
             {
                 p->ended = true;
                 opalFlushWriteBuf(&p->opl);
             }
-            if (n == 0)
+            uint64_t absorbed = (n < p->lag) ? n : p->lag;
+            p->lag -= absorbed;
+            p->wait += n - absorbed;
+            if (p->wait == 0)
             {
-                zeroSteps += 1;
-                if (zeroSteps > STEP_STALL_LIMIT)
-                {
-                    p->wait = (uint64_t)(frameCount - i);
-                }
-            }
-            else
-            {
-                zeroSteps = 0;
+                stalledSteps += 1;
             }
         }
 
@@ -72,6 +67,11 @@ static void dataCallback(ma_device* device, void* output, const void* input, ma_
         {
             opalSample(&p->opl, &left, &right);
             --p->wait;
+        }
+        else if (!p->ended)
+        {
+            opalSample(&p->opl, &left, &right);
+            ++p->lag;
         }
         else if (p->tail > 0)
         {
@@ -143,8 +143,13 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         const char* arg = argv[i];
-        if (strcmp(arg, "--rate") == 0 && i + 1 < argc)
+        if (strcmp(arg, "--rate") == 0)
         {
+            if (i + 1 >= argc)
+            {
+                fprintf(stderr, "player: --rate needs a value (1..65535 Hz)\n");
+                return EXIT_FAILURE;
+            }
             const char* rateValue = argv[++i];
             char* end = NULL;
             unsigned long hz = strtoul(rateValue, &end, 10);

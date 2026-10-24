@@ -4,13 +4,13 @@
 
     Opal OPL3 emulator (public API).
 
-    Core by Shayde/Reality. Public domain. See PUBLIC_DOMAIN_PROOF.txt.
-    C11 port, C API, resampling, and pan by Bitdancer. See LICENSE and THIRD_PARTY_LICENSES.md.
-
-    Covers full OPL2/OPL3. Stereo output matches YMF262 reference behavior. 2/4 op FM, 8
-    waveforms, LFOs, rhythm, timers, status via opalReadStatus. Register 08 bit 7 is unused on
-    the YMF262, as on the real chip. Bank 1, four-operator pairing, waveforms 4-7, and CHA/CHB
-    take effect only while NEW (register 105h bit 0) is set.
+    Emulates the YMF262 (OPL3), including the OPL2 compatibility mode that runs YM3812
+    software. 2/4 op FM, 8 waveforms, LFOs, rhythm, timers, status via opalReadStatus.
+    Register 08 bit 7 is unused on the YMF262, as on the real chip. While NEW
+    (register 105h bit 0) is clear, bank 1 writes other than 105h land in bank 0, E0h writes
+    keep only waveforms 0-3, and C0h writes turn on both CHA and CHB. Changing NEW never
+    changes what was already written: all 18 channels always play, and four-operator pairs
+    follow register 104h alone.
 
     The Opal struct holds no pointers: all internal references are indices, so an instance is
     a plain value. Copy, memcpy, or relocate it freely. A copy is a complete save state.
@@ -29,12 +29,13 @@ extern "C"
 
 typedef struct OpalChannel OpalChannel;
 typedef struct OpalOperator OpalOperator;
+typedef struct OpalQueuedWrite OpalQueuedWrite;
 typedef struct Opal Opal;
 
 // clang-format off
-#define OPAL_VERSION_MAJOR 2
+#define OPAL_VERSION_MAJOR 3
 #define OPAL_VERSION_MINOR 0
-#define OPAL_VERSION_PATCH 3
+#define OPAL_VERSION_PATCH 0
 
 #define OPAL_VERSION ((OPAL_VERSION_MAJOR) * 10000 + (OPAL_VERSION_MINOR) * 100 + (OPAL_VERSION_PATCH))
 
@@ -64,13 +65,6 @@ typedef struct Opal Opal;
 #define OPAL_CHANNEL_TYPE_4OP2  2   /* secondary half of a four-operator pair */
 #define OPAL_CHANNEL_TYPE_DRUM  3   /* rhythm-mode percussion channel */
 
-typedef struct OpalWriteBuf
-{
-    uint64_t time;
-    uint16_t reg;
-    uint8_t  data;
-} OpalWriteBuf;
-
 /*
     A single FM operator (maps to one OPL3 slot).
 
@@ -92,35 +86,30 @@ typedef struct OpalWriteBuf
         key             nonzero while keyed on (bit 0 = normal key on, bit 1 = rhythm key on)
         modSource       phase modulation input: an index into Opal::op whose out is read,
                         OPAL_MOD_OWN_FB for the operator's own feedback, OPAL_OP_NONE for none
+        out             the operator's latest output sample
 */
 struct OpalOperator
 {
-    uint8_t         slotIndex;
-    uint8_t         chanIndex;
-    uint8_t         modSource;
-    uint32_t        phase;
-    uint16_t        phaseOut;
-    bool            phaseReset;
-    uint16_t        waveform;
-    uint16_t        freqMultTimes2;
     int             envelopeStage;
-    uint16_t        envelopeLevel;
     uint16_t        egOut;
-    uint8_t         egKsl;
-    uint16_t        outputLevel;
-    uint16_t        attackRate;
-    uint16_t        decayRate;
-    uint16_t        sustainLevel;
-    uint16_t        releaseRate;
-    uint8_t         keyScaleReg;
     uint8_t         key;
+    uint8_t         modSource;
     int16_t         out;
     int16_t         prevOut;
-    int16_t         fbMod;
-    bool            keyScaleRate;
-    bool            sustainMode;
-    bool            tremoloEnable;
-    bool            vibratoEnable;
+    uint32_t        phase;
+    uint16_t        envelope;
+    uint8_t         tremolo;
+    uint8_t         vibrato;
+    uint8_t         sustainHold;
+    uint8_t         keyScaleRate;
+    uint8_t         multiple;
+    uint8_t         keyScaleLevel;
+    uint8_t         totalLevel;
+    uint8_t         attackRate;
+    uint8_t         decayRate;
+    uint8_t         sustainLevel;
+    uint8_t         releaseRate;
+    uint8_t         waveform;
 };
 
 /*
@@ -135,22 +124,25 @@ struct OpalOperator
 struct OpalChannel
 {
     uint8_t         opSlot[4];
-    uint8_t         chanIndex;
     uint8_t         pairIndex;
     uint8_t         outSource[4];
     int             chanType;
-    uint16_t        freq;
-    uint16_t        octave;
-    uint16_t        keyScaleNumber;
-    uint16_t        feedbackShift;
-    uint16_t        modulationType;
-    uint16_t        alg;
-    uint16_t        cha;
-    uint16_t        chb;
-    uint16_t        chc;
-    uint16_t        chd;
     uint16_t        leftPan;
     uint16_t        rightPan;
+    uint16_t        fNumber;
+    uint8_t         block;
+    uint8_t         latchedKeyScaleNumber;
+    uint8_t         feedback;
+    uint8_t         connection;
+    uint8_t         outputEnable;
+    uint8_t         algorithm;
+};
+
+struct OpalQueuedWrite
+{
+    uint64_t        due;
+    uint16_t        regNum;
+    uint8_t         value;
 };
 
 
@@ -167,42 +159,32 @@ struct Opal
     int32_t             sampleRate;
     int32_t             sampleAccum;
     int16_t             lastOutput[2], currOutput[2];
-    int32_t             mixBuffRight;
     OpalChannel         chan[OPAL_CHANNEL_COUNT];
     OpalOperator        op[OPAL_OPERATOR_COUNT];
-    uint16_t            chipTimer;
-    uint8_t             tremoloPos;
-    uint8_t             tremoloLevel;
-    uint8_t             tremoloShift;
-    uint8_t             vibPos;
-    uint8_t             vibShift;
-    uint64_t            egTimer;
-    uint8_t             egState;
-    uint8_t             egAdd;
-    uint8_t             egTimerLo;
-    uint8_t             egTimerRem;
-    bool                noteSel;
-    bool                opl3Enabled;
-    bool                rhythmMode;
-    bool                waveformSelect;
-    bool                compositeSineWave;
-    uint32_t            noise;
-    uint8_t             rmHhBit2;
-    uint8_t             rmHhBit3;
-    uint8_t             rmHhBit7;
-    uint8_t             rmHhBit8;
-    uint8_t             rmTcBit3;
-    uint8_t             rmTcBit5;
-    uint8_t             rhythmReg;
     uint8_t             timer[2];
     uint8_t             timerControl;
     uint16_t            timerCount[2];
     uint8_t             status;
-    OpalWriteBuf        writeBuf[OPAL_WRITEBUF_SIZE];
-    uint64_t            writeBufSampleCount;
-    uint32_t            writeBufCur;
-    uint32_t            writeBufLast;
-    uint64_t            writeBufLastTime;
+    uint8_t             newMode;
+    uint8_t             pairEnable;
+    uint8_t             rhythmMode;
+    uint8_t             noteSelect;
+    uint8_t             tremoloDepth;
+    uint8_t             vibratoDepth;
+    uint8_t             waveSelectEnable;
+    uint8_t             compositeSine;
+    uint8_t             tremoloPosition;
+    uint8_t             tremoloLevel;
+    uint16_t            sampleCounter;
+    uint16_t            hiHatPhase;
+    uint16_t            cymbalPhase;
+    uint32_t            noise;
+    int32_t             pendingRight;
+    uint64_t            chipSamples;
+    uint64_t            lastDue;
+    uint16_t            queueHead;
+    uint16_t            queueCount;
+    OpalQueuedWrite     queue[OPAL_WRITEBUF_SIZE];
 };
 // clang-format on
 
@@ -212,14 +194,16 @@ struct Opal
 /*!
  * \brief Initialize Opal with a given output sample rate, resetting all chip state
  * \param self Pointer to the Opal instance
- * \param sampleRate Desired output sample rate
+ * \param sampleRate Desired output sample rate in Hz (0 or less selects 49716, values above
+ *        INT32_MAX - 49716 are clamped to it)
  */
 void opalInit(Opal* self, int sampleRate);
 
 /*!
  * \brief Change the output sample rate of an existing initialized instance
  * \param self Pointer to the Opal instance
- * \param sampleRate Desired output sample rate
+ * \param sampleRate Desired output sample rate in Hz (0 or less selects 49716, values above
+ *        INT32_MAX - 49716 are clamped to it)
  */
 void opalSetSampleRate(Opal* self, int sampleRate);
 
@@ -232,7 +216,9 @@ void opalSetSampleRate(Opal* self, int sampleRate);
 void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val);
 
 /*!
- * \brief Queue a register write, spaced OPAL_WRITEBUF_DELAY chip samples apart (chip-accurate timing)
+ * \brief Queue a register write. Queued writes land at least OPAL_WRITEBUF_DELAY chip samples
+ *        apart, so a key-off followed by a key-on still restarts the envelope. The spacing is an
+ *        emulator convention, much slower than the chip's bus, so long bursts fall behind.
  * \param self Pointer to the Opal instance
  * \param regNum OPL3 Register address
  * \param val Value to write
@@ -249,7 +235,7 @@ void opalFlushWriteBuf(Opal* self);
  * \brief Set panning level per channel
  * \param self Pointer to the Opal instance
  * \param channel Channel index 0 to 17, or 0 to 8 with bit 8 set for the second bank
- * \param pan Panning level (0 left, 64 middle, 127 right)
+ * \param pan Panning level (0 left, 64 middle, 127 right, higher values clamp to 127)
  */
 void opalPan(Opal* self, uint16_t channel, uint8_t pan);
 
@@ -263,8 +249,9 @@ void opalSample(Opal* self, int16_t* left, int16_t* right);
 
 /*!
  * \brief Read the chip status register (bit 7 = IRQ, bit 6 = Timer 1 overflow, bit 5 = Timer 2
- *        overflow). Flags stay set until a reset write (bit 7 of register 4), as on real
- *        hardware.
+ *        overflow). A flag stays set until a reset write (bit 7 of register 4) or a write that
+ *        sets its timer's mask bit. IRQ stays set while any flag is. A masked timer sets
+ *        neither its flag nor IRQ.
  * \param self Pointer to the Opal instance
  * \return The status byte, as a real OPL would return on a status-port read
  */

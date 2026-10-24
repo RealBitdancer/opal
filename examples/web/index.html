@@ -154,6 +154,7 @@
 
   let mod = null;
   let poll = null;
+  let endCheck = null;
   let levelsPtr = 0;
   let meterBars = [];
   let playingBtn = null;
@@ -261,17 +262,19 @@
     stopPoll();
     const tick = () => {
       updateMeters();
-      if (mod && (mod.ccall("webSongEnd", "number", [], []) || mod.ccall("webFinished", "number", [], []))) {
-        stopPoll();
-        playNext();
-        return;
-      }
       poll = requestAnimationFrame(tick);
     };
     poll = requestAnimationFrame(tick);
+    endCheck = setInterval(() => {
+      if (mod && mod.ccall("webFinished", "number", [], [])) {
+        stopPoll();
+        playNext();
+      }
+    }, 100);
   }
   function stopPoll() {
     if (poll) { cancelAnimationFrame(poll); poll = null; }
+    if (endCheck) { clearInterval(endCheck); endCheck = null; }
   }
 
   function playNext() {
@@ -296,6 +299,8 @@
       bytes = new Uint8Array(await resp.arrayBuffer());
     } catch (e) {
       if (seq !== playSeq) { return; }
+      mod.ccall("webStop", null, [], []);
+      markPlaying(null);
       setStatus("Could not fetch " + file + " (" + e.message + ")");
       return;
     }
@@ -332,11 +337,24 @@
     buildVu();
     if (wantsAutoplay) {
       tryAutoplay();
-      document.addEventListener("pointerdown", () => {
-        if (!playingBtn) {
+      const unlock = (e) => {
+        if (navigator.userActivation && !navigator.userActivation.isActive) {
+          return;
+        }
+        document.removeEventListener("touchend", unlock);
+        document.removeEventListener("click", unlock);
+        if (e.target && e.target.closest && e.target.closest("button")) {
+          return;
+        }
+        if (playingBtn) {
+          bypassIosSilentSwitch();
+          mod.ccall("webInit", "number", [], []);
+        } else {
           tryAutoplay();
         }
-      }, { once: true });
+      };
+      document.addEventListener("touchend", unlock);
+      document.addEventListener("click", unlock);
     } else {
       setStatus("Ready. Pick a track.");
     }

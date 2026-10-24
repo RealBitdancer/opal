@@ -7,11 +7,10 @@ wrote one, or know of one that is missing, send a pull request and it will be ad
 
 | Name                                                    | Binding version | Language                     | License |
 | :------------------------------------------------------ | :-------------: | :--------------------------: | :-----: |
-| [opal-zig](https://github.com/RealBitdancer/opal-zig)   | 2.0.2-1         | [Zig](https://ziglang.org)   | MIT     |
-| [opal-rust](https://github.com/RealBitdancer/opal-rust) | 2.0.2-1         | [Rust](https://www.rust-lang.org) | MIT     |
+| [opal-zig](https://github.com/RealBitdancer/opal-zig)   | 3.0.0-1         | [Zig](https://ziglang.org)   | MIT     |
+| [opal-rust](https://github.com/RealBitdancer/opal-rust) | 3.0.0-1         | [Rust](https://www.rust-lang.org) | MIT     |
 
-Binding versions are the bound opal release plus a packaging revision, so `2.0.2-1` is
-the first binding release for opal `2.0.2`. opal 2.0.3 did not change the C API, so those
-revisions still apply.
+Binding versions are the bound opal release plus a packaging revision, so `3.0.0-1` is
+the first binding release for opal `3.0.0`.
 
 Bindings usually follow the naming convention `opal-{language}`.

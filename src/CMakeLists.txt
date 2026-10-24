@@ -22,6 +22,7 @@ target_sources(${PROJECT_NAME}
 set_target_properties(${PROJECT_NAME} PROPERTIES
     FOLDER ${PROJECT_NAME}
     VERSION ${PROJECT_VERSION}
+    INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE c_std_11)

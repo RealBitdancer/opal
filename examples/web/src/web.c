@@ -28,9 +28,9 @@ typedef struct
     MusicSource* source;
     uint8_t* data;
     uint64_t wait;
+    uint64_t lag;
     uint64_t tail;
     bool ended;
-    bool complete;
 } Song;
 
 static ma_device device;
@@ -42,37 +42,27 @@ static bool songReady;
 static void render(void* output, ma_uint32 frameCount)
 {
     int16_t* out = (int16_t*)output;
-    uint32_t zeroSteps = 0;
+    uint32_t stalledSteps = 0;
     for (ma_uint32 i = 0; i < frameCount; ++i)
     {
         int16_t left = 0;
         int16_t right = 0;
 
-        while (song.wait == 0 && !song.ended)
+        while (song.wait == 0 && !song.ended && stalledSteps < STEP_STALL_LIMIT)
         {
             bool done = false;
             uint64_t n = song.source->step(song.source, &song.opl, &done);
-            song.wait += n;
             if (done)
             {
-                song.complete = true;
-                if (!song.source->loop)
-                {
-                    song.ended = true;
-                    opalFlushWriteBuf(&song.opl);
-                }
+                song.ended = true;
+                opalFlushWriteBuf(&song.opl);
             }
-            if (n == 0)
+            uint64_t absorbed = (n < song.lag) ? n : song.lag;
+            song.lag -= absorbed;
+            song.wait += n - absorbed;
+            if (song.wait == 0)
             {
-                zeroSteps += 1;
-                if (zeroSteps > STEP_STALL_LIMIT)
-                {
-                    song.wait = (uint64_t)(frameCount - i);
-                }
-            }
-            else
-            {
-                zeroSteps = 0;
+                stalledSteps += 1;
             }
         }
 
@@ -80,6 +70,11 @@ static void render(void* output, ma_uint32 frameCount)
         {
             opalSample(&song.opl, &left, &right);
             --song.wait;
+        }
+        else if (!song.ended)
+        {
+            opalSample(&song.opl, &left, &right);
+            ++song.lag;
         }
         else if (song.tail > 0)
         {
@@ -146,6 +141,11 @@ static bool ensureDevice(void)
 EMSCRIPTEN_KEEPALIVE
 int webInit(void)
 {
+    if (deviceReady && started)
+    {
+        ma_device_stop(&device);
+        started = false;
+    }
     return ensureDevice() ? 1 : 0;
 }
 
@@ -160,7 +160,7 @@ int webLoad(const char* name, const uint8_t* data, int size)
     songReady = false;
     freeSong();
 
-    if (size <= 0)
+    if (name == NULL || data == NULL || size <= 0)
     {
         return 0;
     }
@@ -197,8 +197,7 @@ int webLoad(const char* name, const uint8_t* data, int size)
     // Opening writes must land before the first sample.
     bool done = false;
     song.wait = song.source->step(song.source, &song.opl, &done);
-    song.ended = done && !song.source->loop;
-    song.complete = false;
+    song.ended = done;
     if (song.ended)
     {
         opalFlushWriteBuf(&song.opl);
@@ -213,11 +212,6 @@ void webStop(void)
 {
     songReady = false;
     freeSong();
-    if (deviceReady && started)
-    {
-        ma_device_stop(&device);
-        started = false;
-    }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -230,17 +224,6 @@ EMSCRIPTEN_KEEPALIVE
 int webLooping(void)
 {
     return (songReady && song.source != NULL && song.source->loop) ? 1 : 0;
-}
-
-EMSCRIPTEN_KEEPALIVE
-int webSongEnd(void)
-{
-    if (!songReady || !song.complete)
-    {
-        return 0;
-    }
-    song.complete = false;
-    return 1;
 }
 
 static uint8_t levelFromOp(const OpalOperator* op)

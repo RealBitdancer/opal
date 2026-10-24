@@ -2,6 +2,71 @@
 
 All notable changes to this project are documented here.
 
+## [3.0.0] - 2026-10-24
+
+The emulation core and the HSC decoder are rewritten from scratch. The struct layout
+changes. The eight API functions keep their names and signatures.
+
+### Changed
+
+- The core in `src/opal.c` is new. Only the output resampler still follows the
+  public-domain Opal.
+- `OpalOperator`, `OpalChannel`, and `Opal` have a new internal layout. The visualizer
+  fields keep their names and meaning: `envelopeStage`, `egOut`, `key`, `modSource`, and
+  `out` in each operator, `opSlot`, `pairIndex`, `outSource`, `chanType`, `leftPan`, and
+  `rightPan` in each channel, and the `op` and `chan` arrays. `OPAL_VERSION_MAJOR` is 3.
+- The HSC decoder's instrument upload, volume handling, level effects, and start-up
+  sequence are rewritten. Their register writes match the previous decoder.
+
+### Fixed
+
+- Clearing NEW silenced channels 9-17 and split four-operator pairs. Both now stay as set,
+  as on the chip.
+- The compatibility-mode limits on waveforms and speakers applied at output time, so
+  changing NEW changed what was already set. They now apply when E0h-F5h and C0h-C8h are
+  written.
+- Enabling a four-operator pair left the secondary channel on its old frequency, and its
+  own frequency writes were lost. The pair now takes the primary's frequency at once, and
+  the secondary's values return when the pair is split.
+- A masked timer still set its status flag. It now sets nothing, and setting a mask bit
+  clears a flag already set.
+- DOSBox writes DRO registers 00h-04h and 104h without the escape and opens captures with a
+  register dump. The loader read those bytes as delays and switches, so captures started
+  with a long pause or lost their 105h write and played as OPL2. It now recognizes both.
+- OPL3 DRO captures set NEW before playback when their opening block enables it.
+- DRO delays carry their rounding remainder, so songs of short delays no longer run fast.
+- A DRO length field near 4 GB could make the loader read past the end of the buffer.
+- Dual OPL2 DRO captures put the second chip's writes on top of the first. They now play in
+  OPL3 mode with both chips on both speakers.
+- `opalInit` and `opalSetSampleRate` overflowed on rates above INT32_MAX - 49716. Those now
+  clamp.
+- `opalSetSampleRate` discarded the write queue, so a queued key-off could be lost. It now
+  changes only the rate.
+- `opalPan` values above 127 drove the left channel to full scale. They now clamp to 127.
+- The installed static library held only link-time optimization bytecode. It is now built
+  without it.
+- HSC reported its loop point one row early.
+- More than 1024 zero-delay events in a row shifted the rest of the song in the example and
+  web players.
+- Web demo: the end of a song was cut off, background tabs stopped after one track, a
+  failed download kept the old track playing, and Stop left part of the old track queued.
+  `webSongEnd` is gone, and `webLoad` rejects null pointers.
+- Web demo: with `?play=1`, the first tap now runs the iOS silent-switch workaround.
+- `player --rate` with no value now says the value is missing.
+
+### Build
+
+- `.clang-format` sets `InsertBraces`.
+
+### Documentation
+
+- README describes compatibility mode as it behaves now, and the one known difference
+  from Nuked-OPL3. It no longer calls the core a public-domain port, or
+  `opalWriteRegBuffered` chip-accurate. The install example asks for 3.0.
+- README, THIRD_PARTY_LICENSES.md, BINDINGS.md, and CONTRIBUTING.md state where the code
+  comes from. Language bindings are at `3.0.0-1`.
+- The install steps build and install the Release configuration.
+
 ## [2.0.3] - 2026-08-22
 
 The synthesis core is the same as 2.0.2. This release is the example player and the web

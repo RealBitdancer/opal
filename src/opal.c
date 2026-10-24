@@ -2,13 +2,10 @@
     Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
     SPDX-License-Identifier: MIT
 
-    Opal OPL3 emulator.
+    Opal OPL3 emulator core.
 
-    Emulation core by Shayde/Reality (Reality Adlib Tracker 2). Public domain. See PUBLIC_DOMAIN_PROOF.txt.
-    C11 port from OpenMPT soundlib/opal.h. C API, resampling, pan, rhythm, timers, and accuracy
-    work by Bitdancer. See LICENSE and THIRD_PARTY_LICENSES.md.
-
-    Stereo output matches YMF262 reference emulator behavior.
+    The output resampler follows the public-domain Opal by Shayde/Reality. Everything else is
+    written from scratch. See THIRD_PARTY_LICENSES.md.
 */
 
 #include "opal/opal.h"
@@ -16,33 +13,81 @@
 #include <stdint.h>
 #include <string.h>
 
-enum
+#define OPAL_CHANNELS_PER_BANK 9
+#define OPAL_OPERATORS_PER_BANK 18
+#define OPAL_PAIRS_PER_BANK 3u
+#define OPAL_VOICE_STRIDE 3
+#define OPAL_LEFT_SUM_SLOT 14
+#define OPAL_RIGHT_SUM_SLOT 32
+#define OPAL_BASS_DRUM_CHANNEL 6
+#define OPAL_RHYTHM_FIRST_SLOT 12
+#define OPAL_HI_HAT_SLOT 13
+#define OPAL_SNARE_SLOT 16
+#define OPAL_CYMBAL_SLOT 17
+#define OPAL_HI_HAT_PHASE_NOISY 0xD0u
+#define OPAL_HI_HAT_PHASE_QUIET 0x34u
+#define OPAL_CYMBAL_PHASE 0x80u
+#define OPAL_NEW_REGISTER 0x105u
+#define OPAL_FOUR_OP_REGISTER 0x104u
+#define OPAL_RHYTHM_REGISTER 0xBDu
+#define OPAL_PAIR_ENABLE_MASK 0x3Fu
+#define OPAL_OUTPUT_BOTH_SIDES 3u
+#define OPAL_WAVEFORM_MASK_NEW 7u
+#define OPAL_WAVEFORM_MASK_OPL2 3u
+#define OPAL_ENVELOPE_SILENT 511u
+#define OPAL_ENVELOPE_OFF_ZONE 504u
+#define OPAL_ENVELOPE_PERIOD ((UINT64_C(1) << 36) - 1u)
+#define OPAL_RATE_FAST 48u
+#define OPAL_RATE_INSTANT 60u
+#define OPAL_TREMOLO_STEPS 210u
+#define OPAL_TREMOLO_PEAK 105u
+#define OPAL_AUDIBLE_LEVEL_LIMIT 3072u
+#define OPAL_EXPONENT_IMPLICIT_ONE 1024u
+#define OPAL_FULL_GAIN 256
+
+#define OPAL_ALGORITHM_FM 0u
+#define OPAL_ALGORITHM_ADDITIVE 1u
+#define OPAL_ALGORITHM_CHAIN 2u
+#define OPAL_ALGORITHM_TWO_PAIRS 3u
+#define OPAL_ALGORITHM_SOLO_CHAIN 4u
+#define OPAL_ALGORITHM_SOLO_PAIR 5u
+#define OPAL_ALGORITHM_KICK_FM 6u
+#define OPAL_ALGORITHM_KICK_DIRECT 7u
+#define OPAL_ALGORITHM_PERCUSSION 8u
+#define OPAL_ALGORITHM_COUNT 9u
+
+typedef struct OpalEnvelopeTime
 {
-    OPAL_KEY_NORMAL = 0x01,
-    OPAL_KEY_DRUM = 0x02
-};
+    bool odd;
+    uint64_t count;
+} OpalEnvelopeTime;
+
+typedef struct OpalAlgorithm
+{
+    uint8_t operatorCount;
+    uint8_t chainMask;
+    uint8_t carrierMask;
+    uint8_t gain;
+    bool selfFeedback;
+} OpalAlgorithm;
+
+typedef struct OpalWave
+{
+    uint16_t attenuation;
+    bool negative;
+    bool silent;
+} OpalWave;
+
+typedef struct OpalVibratoStep
+{
+    uint8_t halves;
+    bool negative;
+} OpalVibratoStep;
 
 // clang-format off
-static const int8_t adSlot[0x20] =
-{
-    0,  1,  2,  3,  4,  5,  -1, -1, 6,  7,  8,  9,  10, 11, -1, -1,
-    12, 13, 14, 15, 16, 17, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-};
-
-// The slot layout is documented for consumers in opal.h (OpalOperator notes). Keep them in sync.
-static const uint8_t chSlot[18] =
-{
-    0, 1, 2, 6, 7, 8, 12, 13, 14, 18, 19, 20, 24, 25, 26, 30, 31, 32,
-};
-
 static const uint16_t mulTimes2[16] =
 {
     1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30,
-};
-
-static const uint8_t kslShift[4] =
-{
-    8, 1, 2, 0
 };
 
 static const uint8_t kslRom[16] =
@@ -50,49 +95,41 @@ static const uint8_t kslRom[16] =
     0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64
 };
 
-static const uint8_t egIncStep[4][4] = 
+/* Decapped OPL2/OPL3 exponent ROM, raw ten-bit values in ascending order. */
+static const uint16_t exponentRom[0x100] =
 {
-    {0, 0, 0, 0},
-    {1, 0, 0, 0},
-    {1, 0, 1, 0},
-    {1, 1, 1, 0},
-};
-
-/* Decapped OPL2/OPL3 chip ROM. Hardware constants; see THIRD_PARTY_LICENSES.md. */
-static const uint16_t expTable[0x100] =
-{
-    0x7FA, 0x7F5, 0x7EF, 0x7EA, 0x7E4, 0x7DF, 0x7DA, 0x7D4,
-    0x7CF, 0x7C9, 0x7C4, 0x7BF, 0x7B9, 0x7B4, 0x7AE, 0x7A9,
-    0x7A4, 0x79F, 0x799, 0x794, 0x78F, 0x78A, 0x784, 0x77F,
-    0x77A, 0x775, 0x770, 0x76A, 0x765, 0x760, 0x75B, 0x756,
-    0x751, 0x74C, 0x747, 0x742, 0x73D, 0x738, 0x733, 0x72E,
-    0x729, 0x724, 0x71F, 0x71A, 0x715, 0x710, 0x70B, 0x706,
-    0x702, 0x6FD, 0x6F8, 0x6F3, 0x6EE, 0x6E9, 0x6E5, 0x6E0,
-    0x6DB, 0x6D6, 0x6D2, 0x6CD, 0x6C8, 0x6C4, 0x6BF, 0x6BA,
-    0x6B5, 0x6B1, 0x6AC, 0x6A8, 0x6A3, 0x69E, 0x69A, 0x695,
-    0x691, 0x68C, 0x688, 0x683, 0x67F, 0x67A, 0x676, 0x671,
-    0x66D, 0x668, 0x664, 0x65F, 0x65B, 0x657, 0x652, 0x64E,
-    0x649, 0x645, 0x641, 0x63C, 0x638, 0x634, 0x630, 0x62B,
-    0x627, 0x623, 0x61E, 0x61A, 0x616, 0x612, 0x60E, 0x609,
-    0x605, 0x601, 0x5FD, 0x5F9, 0x5F5, 0x5F0, 0x5EC, 0x5E8,
-    0x5E4, 0x5E0, 0x5DC, 0x5D8, 0x5D4, 0x5D0, 0x5CC, 0x5C8,
-    0x5C4, 0x5C0, 0x5BC, 0x5B8, 0x5B4, 0x5B0, 0x5AC, 0x5A8,
-    0x5A4, 0x5A0, 0x59C, 0x599, 0x595, 0x591, 0x58D, 0x589,
-    0x585, 0x581, 0x57E, 0x57A, 0x576, 0x572, 0x56F, 0x56B,
-    0x567, 0x563, 0x560, 0x55C, 0x558, 0x554, 0x551, 0x54D,
-    0x549, 0x546, 0x542, 0x53E, 0x53B, 0x537, 0x534, 0x530,
-    0x52C, 0x529, 0x525, 0x522, 0x51E, 0x51B, 0x517, 0x514,
-    0x510, 0x50C, 0x509, 0x506, 0x502, 0x4FF, 0x4FB, 0x4F8,
-    0x4F4, 0x4F1, 0x4ED, 0x4EA, 0x4E7, 0x4E3, 0x4E0, 0x4DC,
-    0x4D9, 0x4D6, 0x4D2, 0x4CF, 0x4CC, 0x4C8, 0x4C5, 0x4C2,
-    0x4BE, 0x4BB, 0x4B8, 0x4B5, 0x4B1, 0x4AE, 0x4AB, 0x4A8,
-    0x4A4, 0x4A1, 0x49E, 0x49B, 0x498, 0x494, 0x491, 0x48E,
-    0x48B, 0x488, 0x485, 0x482, 0x47E, 0x47B, 0x478, 0x475,
-    0x472, 0x46F, 0x46C, 0x469, 0x466, 0x463, 0x460, 0x45D,
-    0x45A, 0x457, 0x454, 0x451, 0x44E, 0x44B, 0x448, 0x445,
-    0x442, 0x43F, 0x43C, 0x439, 0x436, 0x433, 0x430, 0x42D,
-    0x42A, 0x428, 0x425, 0x422, 0x41F, 0x41C, 0x419, 0x416,
-    0x414, 0x411, 0x40E, 0x40B, 0x408, 0x406, 0x403, 0x400,
+    0x000, 0x003, 0x006, 0x008, 0x00B, 0x00E, 0x011, 0x014,
+    0x016, 0x019, 0x01C, 0x01F, 0x022, 0x025, 0x028, 0x02A,
+    0x02D, 0x030, 0x033, 0x036, 0x039, 0x03C, 0x03F, 0x042,
+    0x045, 0x048, 0x04B, 0x04E, 0x051, 0x054, 0x057, 0x05A,
+    0x05D, 0x060, 0x063, 0x066, 0x069, 0x06C, 0x06F, 0x072,
+    0x075, 0x078, 0x07B, 0x07E, 0x082, 0x085, 0x088, 0x08B,
+    0x08E, 0x091, 0x094, 0x098, 0x09B, 0x09E, 0x0A1, 0x0A4,
+    0x0A8, 0x0AB, 0x0AE, 0x0B1, 0x0B5, 0x0B8, 0x0BB, 0x0BE,
+    0x0C2, 0x0C5, 0x0C8, 0x0CC, 0x0CF, 0x0D2, 0x0D6, 0x0D9,
+    0x0DC, 0x0E0, 0x0E3, 0x0E7, 0x0EA, 0x0ED, 0x0F1, 0x0F4,
+    0x0F8, 0x0FB, 0x0FF, 0x102, 0x106, 0x109, 0x10C, 0x110,
+    0x114, 0x117, 0x11B, 0x11E, 0x122, 0x125, 0x129, 0x12C,
+    0x130, 0x134, 0x137, 0x13B, 0x13E, 0x142, 0x146, 0x149,
+    0x14D, 0x151, 0x154, 0x158, 0x15C, 0x160, 0x163, 0x167,
+    0x16B, 0x16F, 0x172, 0x176, 0x17A, 0x17E, 0x181, 0x185,
+    0x189, 0x18D, 0x191, 0x195, 0x199, 0x19C, 0x1A0, 0x1A4,
+    0x1A8, 0x1AC, 0x1B0, 0x1B4, 0x1B8, 0x1BC, 0x1C0, 0x1C4,
+    0x1C8, 0x1CC, 0x1D0, 0x1D4, 0x1D8, 0x1DC, 0x1E0, 0x1E4,
+    0x1E8, 0x1EC, 0x1F0, 0x1F5, 0x1F9, 0x1FD, 0x201, 0x205,
+    0x209, 0x20E, 0x212, 0x216, 0x21A, 0x21E, 0x223, 0x227,
+    0x22B, 0x230, 0x234, 0x238, 0x23C, 0x241, 0x245, 0x249,
+    0x24E, 0x252, 0x257, 0x25B, 0x25F, 0x264, 0x268, 0x26D,
+    0x271, 0x276, 0x27A, 0x27F, 0x283, 0x288, 0x28C, 0x291,
+    0x295, 0x29A, 0x29E, 0x2A3, 0x2A8, 0x2AC, 0x2B1, 0x2B5,
+    0x2BA, 0x2BF, 0x2C4, 0x2C8, 0x2CD, 0x2D2, 0x2D6, 0x2DB,
+    0x2E0, 0x2E5, 0x2E9, 0x2EE, 0x2F3, 0x2F8, 0x2FD, 0x302,
+    0x306, 0x30B, 0x310, 0x315, 0x31A, 0x31F, 0x324, 0x329,
+    0x32E, 0x333, 0x338, 0x33D, 0x342, 0x347, 0x34C, 0x351,
+    0x356, 0x35B, 0x360, 0x365, 0x36A, 0x370, 0x375, 0x37A,
+    0x37F, 0x384, 0x38A, 0x38F, 0x394, 0x399, 0x39F, 0x3A4,
+    0x3A9, 0x3AE, 0x3B4, 0x3B9, 0x3BF, 0x3C4, 0x3C9, 0x3CF,
+    0x3D4, 0x3DA, 0x3DF, 0x3E4, 0x3EA, 0x3EF, 0x3F5, 0x3FA,
 };
 
 static const uint16_t logSinTable[0x100] =
@@ -114,925 +151,43 @@ static const uint16_t logSinTable[0x100] =
        7,    7,    6,    6,    5,    5,    5,    4,    4,    4,    3,    3,    3,    2,    2,    2,
        2,    1,    1,    1,    1,    1,    1,    1,    0,    0,    0,    0,    0,    0,    0,    0,
 };
+
+static const uint8_t operatorOwner[OPAL_OPERATOR_COUNT] =
+{
+     0,  1,  2,  0,  1,  2,  3,  4,  5,  3,  4,  5,  6,  7,  8,  6,  7,  8,
+     9, 10, 11,  9, 10, 11, 12, 13, 14, 12, 13, 14, 15, 16, 17, 15, 16, 17,
+};
+
+static const uint8_t rhythmKeyBit[6] = { 4, 0, 2, 4, 3, 1 };
+
+static const OpalVibratoStep vibratoSteps[8] =
+{
+    { 0, false }, { 1, false }, { 2, false }, { 1, false },
+    { 0, false }, { 1, true  }, { 2, true  }, { 1, true  },
+};
+
+static const OpalAlgorithm opalAlgorithms[OPAL_ALGORITHM_COUNT] =
+{
+    { 2, 0x2, 0x2, 1, true  },
+    { 2, 0x0, 0x3, 1, true  },
+    { 4, 0xE, 0x8, 1, true  },
+    { 4, 0xA, 0xA, 1, true  },
+    { 4, 0xC, 0x9, 1, true  },
+    { 4, 0x4, 0xD, 1, true  },
+    { 2, 0x2, 0x2, 2, true  },
+    { 2, 0x0, 0x2, 2, true  },
+    { 2, 0x0, 0x3, 2, false },
+};
 // clang-format on
 
-static int16_t opalClipSample(int32_t sample)
+static int16_t opalSaturate(int32_t sum)
 {
-    if (sample > 32767)
-    {
-        return 32767;
-    }
-    if (sample < -32768)
-    {
-        return -32768;
-    }
-    return (int16_t)sample;
+    return (int16_t)(sum > INT16_MAX ? INT16_MAX : (sum < INT16_MIN ? INT16_MIN : sum));
 }
 
 static int16_t opalInterpolate(int16_t last, int16_t curr, int32_t fract)
 {
     return (int16_t)(last + (int32_t)(((int64_t)fract * (curr - last)) / 65536));
-}
-
-static void operatorUpdateKsl(const Opal* chip, OpalOperator* op)
-{
-    const OpalChannel* chan = &chip->chan[op->chanIndex];
-    int16_t ksl = (int16_t)((kslRom[chan->freq >> 6] << 2) - ((int16_t)(0x08 - chan->octave) << 5));
-    if (ksl < 0)
-    {
-        ksl = 0;
-    }
-    op->egKsl = (uint8_t)ksl;
-}
-
-static int16_t operatorExpCalc(uint32_t level)
-{
-    if (level > 0x1FFF)
-    {
-        level = 0x1FFF;
-    }
-    return (int16_t)((expTable[level & 0xFF] << 1) >> (level >> 8));
-}
-
-static int16_t operatorWave(const Opal* chip, const OpalOperator* op, uint16_t phase, uint16_t envelope)
-{
-    uint16_t out = 0;
-    uint16_t neg = 0;
-    uint16_t waveform = op->waveform;
-
-    if (!chip->opl3Enabled)
-    {
-        waveform &= 0x03;
-    }
-
-    phase &= 0x3FF;
-
-    switch (waveform)
-    {
-        case 0:
-        {
-            if (phase & 0x200)
-            {
-                neg = 0xFFFF;
-            }
-            if (phase & 0x100)
-            {
-                out = logSinTable[(phase & 0xFF) ^ 0xFF];
-            }
-            else
-            {
-                out = logSinTable[phase & 0xFF];
-            }
-            break;
-        }
-        case 1:
-        {
-            if (phase & 0x200)
-            {
-                out = 0x1000;
-            }
-            else if (phase & 0x100)
-            {
-                out = logSinTable[(phase & 0xFF) ^ 0xFF];
-            }
-            else
-            {
-                out = logSinTable[phase & 0xFF];
-            }
-            break;
-        }
-        case 2:
-        {
-            if (phase & 0x100)
-            {
-                out = logSinTable[(phase & 0xFF) ^ 0xFF];
-            }
-            else
-            {
-                out = logSinTable[phase & 0xFF];
-            }
-            break;
-        }
-        case 3:
-        {
-            if (phase & 0x100)
-            {
-                out = 0x1000;
-            }
-            else
-            {
-                out = logSinTable[phase & 0xFF];
-            }
-            break;
-        }
-        case 4:
-        {
-            if ((phase & 0x300) == 0x100)
-            {
-                neg = 0xFFFF;
-            }
-            if (phase & 0x200)
-            {
-                out = 0x1000;
-            }
-            else if (phase & 0x80)
-            {
-                out = logSinTable[((phase ^ 0xFF) << 1) & 0xFF];
-            }
-            else
-            {
-                out = logSinTable[(phase << 1) & 0xFF];
-            }
-            break;
-        }
-        case 5:
-        {
-            if (phase & 0x200)
-            {
-                out = 0x1000;
-            }
-            else if (phase & 0x80)
-            {
-                out = logSinTable[((phase ^ 0xFF) << 1) & 0xFF];
-            }
-            else
-            {
-                out = logSinTable[(phase << 1) & 0xFF];
-            }
-            break;
-        }
-        case 6:
-        {
-            if (phase & 0x200)
-            {
-                neg = 0xFFFF;
-            }
-            break;
-        }
-        default:
-        {
-            if (phase & 0x200)
-            {
-                neg = 0xFFFF;
-                phase = (uint16_t)((phase & 0x1FF) ^ 0x1FF);
-            }
-            out = (uint16_t)(phase << 3);
-            break;
-        }
-    }
-
-    return (int16_t)(operatorExpCalc(out + ((uint32_t)envelope << 3)) ^ neg);
-}
-
-static void operatorEnvelopeCalc(const Opal* chip, OpalOperator* op)
-{
-    uint8_t trem = op->tremoloEnable ? chip->tremoloLevel : 0;
-    op->egOut = (uint16_t)(op->envelopeLevel + op->outputLevel + (op->egKsl >> kslShift[op->keyScaleReg]) + trem);
-
-    uint8_t regRate = 0;
-    uint8_t reset = 0;
-
-    if (op->key && op->envelopeStage == OPAL_ENVELOPE_STAGE_RELEASE)
-    {
-        reset = 1;
-        regRate = (uint8_t)op->attackRate;
-    }
-    else
-    {
-        switch (op->envelopeStage)
-        {
-            case OPAL_ENVELOPE_STAGE_ATTACK:
-            {
-                regRate = (uint8_t)op->attackRate;
-                break;
-            }
-            case OPAL_ENVELOPE_STAGE_DECAY:
-            {
-                regRate = (uint8_t)op->decayRate;
-                break;
-            }
-            case OPAL_ENVELOPE_STAGE_SUSTAIN:
-            {
-                if (!op->sustainMode)
-                {
-                    regRate = (uint8_t)op->releaseRate;
-                }
-                break;
-            }
-            case OPAL_ENVELOPE_STAGE_RELEASE:
-            {
-                regRate = (uint8_t)op->releaseRate;
-                break;
-            }
-            default:
-            {
-                break;
-            }
-        }
-    }
-
-    op->phaseReset = reset;
-
-    uint8_t ks = (uint8_t)(chip->chan[op->chanIndex].keyScaleNumber >> ((op->keyScaleRate ^ 1) << 1));
-    uint8_t rate = (uint8_t)(ks + (regRate << 2));
-    uint8_t rateHi = (uint8_t)(rate >> 2);
-    uint8_t rateLo = (uint8_t)(rate & 3);
-    if (rateHi & 0x10)
-    {
-        rateHi = 0x0F;
-    }
-
-    uint8_t egShift = (uint8_t)(rateHi + chip->egAdd);
-    uint8_t shift = 0;
-    if (regRate != 0)
-    {
-        if (rateHi < 12)
-        {
-            if (chip->egState)
-            {
-                switch (egShift)
-                {
-                    case 12:
-                    {
-                        shift = 1;
-                        break;
-                    }
-                    case 13:
-                    {
-                        shift = (uint8_t)((rateLo >> 1) & 1);
-                        break;
-                    }
-                    case 14:
-                    {
-                        shift = (uint8_t)(rateLo & 1);
-                        break;
-                    }
-                    default:
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-        else
-        {
-            shift = (uint8_t)((rateHi & 3) + egIncStep[rateLo][chip->egTimerLo]);
-            if (shift & 0x04)
-            {
-                shift = 0x03;
-            }
-            if (!shift)
-            {
-                shift = chip->egState;
-            }
-        }
-    }
-
-    uint16_t egRout = op->envelopeLevel;
-    int16_t egInc = 0;
-    uint8_t egOff = 0;
-
-    if (reset && rateHi == 0x0F)
-    {
-        egRout = 0;
-    }
-
-    if ((op->envelopeLevel & 0x1F8) == 0x1F8)
-    {
-        egOff = 1;
-    }
-
-    if (op->envelopeStage != OPAL_ENVELOPE_STAGE_ATTACK && !reset && egOff)
-    {
-        egRout = 0x1FF;
-    }
-
-    switch (op->envelopeStage)
-    {
-        case OPAL_ENVELOPE_STAGE_ATTACK:
-        {
-            if (!egRout)
-            {
-                op->envelopeStage = OPAL_ENVELOPE_STAGE_DECAY;
-            }
-            else if (op->key && shift > 0 && rateHi != 0x0F)
-            {
-                egInc = (int16_t)(~egRout >> (4 - shift));
-            }
-            break;
-        }
-        case OPAL_ENVELOPE_STAGE_DECAY:
-        {
-            if ((egRout >> 4) == (op->sustainLevel >> 4))
-            {
-                op->envelopeStage = OPAL_ENVELOPE_STAGE_SUSTAIN;
-            }
-            else if (!egOff && !reset && shift > 0)
-            {
-                egInc = (int16_t)(1 << (shift - 1));
-            }
-            break;
-        }
-        case OPAL_ENVELOPE_STAGE_SUSTAIN:
-        case OPAL_ENVELOPE_STAGE_RELEASE:
-        {
-            if (!egOff && !reset && shift > 0)
-            {
-                egInc = (int16_t)(1 << (shift - 1));
-            }
-            break;
-        }
-        default:
-        {
-            break;
-        }
-    }
-
-    op->envelopeLevel = (uint16_t)((egRout + egInc) & 0x1FF);
-
-    if (reset)
-    {
-        op->envelopeStage = OPAL_ENVELOPE_STAGE_ATTACK;
-    }
-
-    if (!op->key)
-    {
-        op->envelopeStage = OPAL_ENVELOPE_STAGE_RELEASE;
-    }
-}
-
-static void operatorPhaseGenerate(Opal* chip, OpalOperator* op)
-{
-    const OpalChannel* chan = &chip->chan[op->chanIndex];
-    uint16_t fNum = chan->freq;
-
-    if (op->vibratoEnable)
-    {
-        int8_t range = (int8_t)((fNum >> 7) & 7);
-        uint8_t vibPos = chip->vibPos;
-
-        if (!(vibPos & 3))
-        {
-            range = 0;
-        }
-        else if (vibPos & 1)
-        {
-            range = (int8_t)(range >> 1);
-        }
-        range = (int8_t)(range >> chip->vibShift);
-
-        if (vibPos & 4)
-        {
-            range = (int8_t)-range;
-        }
-
-        fNum = (uint16_t)(fNum + range);
-    }
-
-    uint32_t baseFreq = ((uint32_t)fNum << chan->octave) >> 1;
-    uint16_t phase = (uint16_t)(op->phase >> 9);
-
-    if (op->phaseReset)
-    {
-        op->phase = 0;
-    }
-
-    op->phase += (baseFreq * op->freqMultTimes2) >> 1;
-    op->phaseOut = phase;
-
-    if (op->slotIndex == 13)
-    {
-        chip->rmHhBit2 = (uint8_t)((phase >> 2) & 1);
-        chip->rmHhBit3 = (uint8_t)((phase >> 3) & 1);
-        chip->rmHhBit7 = (uint8_t)((phase >> 7) & 1);
-        chip->rmHhBit8 = (uint8_t)((phase >> 8) & 1);
-    }
-
-    if (op->slotIndex == 17 && (chip->rhythmReg & 0x20))
-    {
-        chip->rmTcBit3 = (uint8_t)((phase >> 3) & 1);
-        chip->rmTcBit5 = (uint8_t)((phase >> 5) & 1);
-    }
-
-    if (chip->rhythmReg & 0x20)
-    {
-        // clang-format off
-        uint8_t rmXor = (uint8_t)((chip->rmHhBit2 ^ chip->rmHhBit7)
-                                 | (chip->rmHhBit3 ^ chip->rmTcBit5)
-                                 | (chip->rmTcBit3 ^ chip->rmTcBit5));
-        // clang-format on
-        uint32_t noise = chip->noise;
-
-        switch (op->slotIndex)
-        {
-            case 13:
-            {
-                op->phaseOut = (uint16_t)(rmXor << 9);
-                if (rmXor ^ (noise & 1))
-                {
-                    op->phaseOut |= 0xD0;
-                }
-                else
-                {
-                    op->phaseOut |= 0x34;
-                }
-                break;
-            }
-            case 16:
-            {
-                op->phaseOut = (uint16_t)((chip->rmHhBit8 << 9) | ((chip->rmHhBit8 ^ (noise & 1)) << 8));
-                break;
-            }
-            case 17:
-            {
-                op->phaseOut = (uint16_t)((rmXor << 9) | 0x80);
-                break;
-            }
-            default:
-            {
-                break;
-            }
-        }
-    }
-
-    uint32_t nBit = ((chip->noise >> 14) ^ chip->noise) & 1u;
-    chip->noise = (chip->noise >> 1) | (nBit << 22);
-}
-
-static void operatorCalcFb(const Opal* chip, OpalOperator* op)
-{
-    uint16_t feedbackShift = chip->chan[op->chanIndex].feedbackShift;
-    if (feedbackShift)
-    {
-        op->fbMod = (int16_t)((op->prevOut + op->out) >> feedbackShift);
-    }
-    else
-    {
-        op->fbMod = 0;
-    }
-    op->prevOut = op->out;
-}
-
-static void operatorGenerate(const Opal* chip, OpalOperator* op)
-{
-    int16_t mod = 0;
-    if (op->modSource < OPAL_OPERATOR_COUNT)
-    {
-        mod = chip->op[op->modSource].out;
-    }
-    else if (op->modSource == OPAL_MOD_OWN_FB)
-    {
-        mod = op->fbMod;
-    }
-    uint16_t phase = (uint16_t)(op->phaseOut + mod);
-    op->out = operatorWave(chip, op, phase, op->egOut);
-}
-
-static void operatorProcess(Opal* chip, OpalOperator* op)
-{
-    operatorCalcFb(chip, op);
-    operatorEnvelopeCalc(chip, op);
-    operatorPhaseGenerate(chip, op);
-    operatorGenerate(chip, op);
-}
-
-static void operatorKeyOn(OpalOperator* op, uint8_t type)
-{
-    op->key |= type;
-}
-
-static void operatorKeyOff(OpalOperator* op, uint8_t type)
-{
-    op->key &= (uint8_t)~type;
-}
-
-static void channelUpdateOpsKsl(Opal* chip, const OpalChannel* chan)
-{
-    for (int i = 0; i < 2; i++)
-    {
-        if (chan->opSlot[i] != OPAL_OP_NONE)
-        {
-            operatorUpdateKsl(chip, &chip->op[chan->opSlot[i]]);
-        }
-    }
-}
-
-static void channelComputeKeyScaleNumber(Opal* chip, OpalChannel* chan)
-{
-    uint16_t lsb = chip->noteSel ? (uint16_t)((chan->freq >> 8) & 1) : (uint16_t)(chan->freq >> 9);
-    chan->keyScaleNumber = (uint16_t)(chan->octave << 1 | lsb);
-    channelUpdateOpsKsl(chip, chan);
-}
-
-static void channelSetupAlg(Opal* chip, OpalChannel* chan);
-
-static void channelUpdateRhythm(Opal* self, uint8_t data)
-{
-    self->rhythmReg = (uint8_t)(data & 0x3F);
-    self->rhythmMode = (data & 0x20) != 0;
-
-    if (self->rhythmReg & 0x20)
-    {
-        OpalChannel* ch6 = &self->chan[6];
-        OpalChannel* ch7 = &self->chan[7];
-        OpalChannel* ch8 = &self->chan[8];
-
-        ch6->outSource[0] = ch6->opSlot[1];
-        ch6->outSource[1] = ch6->opSlot[1];
-        ch6->outSource[2] = OPAL_OP_NONE;
-        ch6->outSource[3] = OPAL_OP_NONE;
-        ch7->outSource[0] = ch7->opSlot[0];
-        ch7->outSource[1] = ch7->opSlot[0];
-        ch7->outSource[2] = ch7->opSlot[1];
-        ch7->outSource[3] = ch7->opSlot[1];
-        ch8->outSource[0] = ch8->opSlot[0];
-        ch8->outSource[1] = ch8->opSlot[0];
-        ch8->outSource[2] = ch8->opSlot[1];
-        ch8->outSource[3] = ch8->opSlot[1];
-
-        for (int ch = 6; ch < 9; ch++)
-        {
-            self->chan[ch].chanType = OPAL_CHANNEL_TYPE_DRUM;
-            channelSetupAlg(self, &self->chan[ch]);
-        }
-
-        if (self->rhythmReg & 0x01)
-        {
-            operatorKeyOn(&self->op[ch7->opSlot[0]], OPAL_KEY_DRUM);
-        }
-        else
-        {
-            operatorKeyOff(&self->op[ch7->opSlot[0]], OPAL_KEY_DRUM);
-        }
-
-        if (self->rhythmReg & 0x02)
-        {
-            operatorKeyOn(&self->op[ch8->opSlot[1]], OPAL_KEY_DRUM);
-        }
-        else
-        {
-            operatorKeyOff(&self->op[ch8->opSlot[1]], OPAL_KEY_DRUM);
-        }
-
-        if (self->rhythmReg & 0x04)
-        {
-            operatorKeyOn(&self->op[ch8->opSlot[0]], OPAL_KEY_DRUM);
-        }
-        else
-        {
-            operatorKeyOff(&self->op[ch8->opSlot[0]], OPAL_KEY_DRUM);
-        }
-
-        if (self->rhythmReg & 0x08)
-        {
-            operatorKeyOn(&self->op[ch7->opSlot[1]], OPAL_KEY_DRUM);
-        }
-        else
-        {
-            operatorKeyOff(&self->op[ch7->opSlot[1]], OPAL_KEY_DRUM);
-        }
-
-        if (self->rhythmReg & 0x10)
-        {
-            operatorKeyOn(&self->op[ch6->opSlot[0]], OPAL_KEY_DRUM);
-            operatorKeyOn(&self->op[ch6->opSlot[1]], OPAL_KEY_DRUM);
-        }
-        else
-        {
-            operatorKeyOff(&self->op[ch6->opSlot[0]], OPAL_KEY_DRUM);
-            operatorKeyOff(&self->op[ch6->opSlot[1]], OPAL_KEY_DRUM);
-        }
-    }
-    else
-    {
-        for (int ch = 6; ch < 9; ch++)
-        {
-            OpalChannel* chan = &self->chan[ch];
-            chan->chanType = OPAL_CHANNEL_TYPE_2OP;
-            channelSetupAlg(self, chan);
-            operatorKeyOff(&self->op[chan->opSlot[0]], OPAL_KEY_DRUM);
-            operatorKeyOff(&self->op[chan->opSlot[1]], OPAL_KEY_DRUM);
-        }
-    }
-}
-
-static void channelWriteA0(Opal* chip, OpalChannel* chan, uint8_t data)
-{
-    if (chip->opl3Enabled && chan->chanType == OPAL_CHANNEL_TYPE_4OP2)
-    {
-        return;
-    }
-
-    chan->freq = (uint16_t)((chan->freq & 0x300) | data);
-    channelComputeKeyScaleNumber(chip, chan);
-
-    if (chip->opl3Enabled && chan->chanType == OPAL_CHANNEL_TYPE_4OP && chan->pairIndex != OPAL_CH_NONE)
-    {
-        OpalChannel* pair = &chip->chan[chan->pairIndex];
-        pair->freq = chan->freq;
-        pair->keyScaleNumber = chan->keyScaleNumber;
-        channelUpdateOpsKsl(chip, pair);
-    }
-}
-
-static void channelWriteB0(Opal* chip, OpalChannel* chan, uint8_t data)
-{
-    if (chip->opl3Enabled && chan->chanType == OPAL_CHANNEL_TYPE_4OP2)
-    {
-        return;
-    }
-
-    chan->freq = (uint16_t)((chan->freq & 0xFF) | ((data & 3) << 8));
-    chan->octave = (uint16_t)((data >> 2) & 7);
-    channelComputeKeyScaleNumber(chip, chan);
-
-    if (chip->opl3Enabled && chan->chanType == OPAL_CHANNEL_TYPE_4OP && chan->pairIndex != OPAL_CH_NONE)
-    {
-        OpalChannel* pair = &chip->chan[chan->pairIndex];
-        pair->freq = chan->freq;
-        pair->octave = chan->octave;
-        pair->keyScaleNumber = chan->keyScaleNumber;
-        channelUpdateOpsKsl(chip, pair);
-    }
-}
-
-static void channelSetupAlg(Opal* chip, OpalChannel* chan)
-{
-    OpalOperator* op0 = &chip->op[chan->opSlot[0]];
-    OpalOperator* op1 = &chip->op[chan->opSlot[1]];
-
-    if (chan->chanType == OPAL_CHANNEL_TYPE_DRUM)
-    {
-        if (chan->chanIndex == 7 || chan->chanIndex == 8)
-        {
-            op0->modSource = OPAL_OP_NONE;
-            op1->modSource = OPAL_OP_NONE;
-            return;
-        }
-
-        if ((chan->modulationType & 1) == 0)
-        {
-            op0->modSource = OPAL_MOD_OWN_FB;
-            op1->modSource = chan->opSlot[0];
-        }
-        else
-        {
-            op0->modSource = OPAL_MOD_OWN_FB;
-            op1->modSource = OPAL_OP_NONE;
-        }
-        return;
-    }
-
-    if (chan->alg & 0x08)
-    {
-        return;
-    }
-
-    if (chan->alg & 0x04)
-    {
-        OpalChannel* pair = &chip->chan[chan->pairIndex];
-        OpalOperator* pairOp0 = &chip->op[pair->opSlot[0]];
-        OpalOperator* pairOp1 = &chip->op[pair->opSlot[1]];
-        pair->outSource[0] = OPAL_OP_NONE;
-        pair->outSource[1] = OPAL_OP_NONE;
-        pair->outSource[2] = OPAL_OP_NONE;
-        pair->outSource[3] = OPAL_OP_NONE;
-
-        switch (chan->alg & 0x03)
-        {
-            case 0:
-            {
-                pairOp0->modSource = OPAL_MOD_OWN_FB;
-                pairOp1->modSource = pair->opSlot[0];
-                op0->modSource = pair->opSlot[1];
-                op1->modSource = chan->opSlot[0];
-                chan->outSource[0] = chan->opSlot[1];
-                chan->outSource[1] = OPAL_OP_NONE;
-                chan->outSource[2] = OPAL_OP_NONE;
-                chan->outSource[3] = OPAL_OP_NONE;
-                break;
-            }
-            case 1:
-            {
-                pairOp0->modSource = OPAL_MOD_OWN_FB;
-                pairOp1->modSource = pair->opSlot[0];
-                op0->modSource = OPAL_OP_NONE;
-                op1->modSource = chan->opSlot[0];
-                chan->outSource[0] = pair->opSlot[1];
-                chan->outSource[1] = chan->opSlot[1];
-                chan->outSource[2] = OPAL_OP_NONE;
-                chan->outSource[3] = OPAL_OP_NONE;
-                break;
-            }
-            case 2:
-            {
-                pairOp0->modSource = OPAL_MOD_OWN_FB;
-                pairOp1->modSource = OPAL_OP_NONE;
-                op0->modSource = pair->opSlot[1];
-                op1->modSource = chan->opSlot[0];
-                chan->outSource[0] = pair->opSlot[0];
-                chan->outSource[1] = chan->opSlot[1];
-                chan->outSource[2] = OPAL_OP_NONE;
-                chan->outSource[3] = OPAL_OP_NONE;
-                break;
-            }
-            default:
-            {
-                pairOp0->modSource = OPAL_MOD_OWN_FB;
-                pairOp1->modSource = OPAL_OP_NONE;
-                op0->modSource = pair->opSlot[1];
-                op1->modSource = OPAL_OP_NONE;
-                chan->outSource[0] = pair->opSlot[0];
-                chan->outSource[1] = chan->opSlot[0];
-                chan->outSource[2] = chan->opSlot[1];
-                chan->outSource[3] = OPAL_OP_NONE;
-                break;
-            }
-        }
-        return;
-    }
-
-    switch (chan->alg & 0x01)
-    {
-        case 0:
-        {
-            op0->modSource = OPAL_MOD_OWN_FB;
-            op1->modSource = chan->opSlot[0];
-            chan->outSource[0] = chan->opSlot[1];
-            chan->outSource[1] = OPAL_OP_NONE;
-            chan->outSource[2] = OPAL_OP_NONE;
-            chan->outSource[3] = OPAL_OP_NONE;
-            break;
-        }
-        default:
-        {
-            op0->modSource = OPAL_MOD_OWN_FB;
-            op1->modSource = OPAL_OP_NONE;
-            chan->outSource[0] = chan->opSlot[0];
-            chan->outSource[1] = chan->opSlot[1];
-            chan->outSource[2] = OPAL_OP_NONE;
-            chan->outSource[3] = OPAL_OP_NONE;
-            break;
-        }
-    }
-}
-
-static void channelUpdateAlg(Opal* chip, OpalChannel* chan)
-{
-    chan->alg = chan->modulationType;
-    if (chip->opl3Enabled)
-    {
-        if (chan->chanType == OPAL_CHANNEL_TYPE_4OP)
-        {
-            OpalChannel* pair = &chip->chan[chan->pairIndex];
-            pair->alg = (uint16_t)(0x04 | (chan->modulationType << 1) | pair->modulationType);
-            chan->alg = (uint16_t)(0x08);
-            channelSetupAlg(chip, pair);
-        }
-        else if (chan->chanType == OPAL_CHANNEL_TYPE_4OP2)
-        {
-            OpalChannel* pair = &chip->chan[chan->pairIndex];
-            chan->alg = (uint16_t)(0x04 | (pair->modulationType << 1) | chan->modulationType);
-            pair->alg = 0x08;
-            channelSetupAlg(chip, chan);
-        }
-        else
-        {
-            channelSetupAlg(chip, chan);
-        }
-    }
-    else
-    {
-        channelSetupAlg(chip, chan);
-    }
-}
-
-static void channelWriteC0(Opal* chip, OpalChannel* chan, uint8_t data)
-{
-    chan->feedbackShift = (uint16_t)(((data & 0x0E) >> 1) ? (9 - ((data & 0x0E) >> 1)) : 0);
-    chan->modulationType = (uint16_t)(data & 1);
-    channelUpdateAlg(chip, chan);
-
-    chan->cha = ((data >> 4) & 1) ? 0xFFFF : 0;
-    chan->chb = ((data >> 5) & 1) ? 0xFFFF : 0;
-    chan->chc = ((data >> 6) & 1) ? 0xFFFF : 0;
-    chan->chd = ((data >> 7) & 1) ? 0xFFFF : 0;
-}
-
-static void channelKeyOn(Opal* chip, const OpalChannel* chan)
-{
-    if (chip->opl3Enabled)
-    {
-        if (chan->chanType == OPAL_CHANNEL_TYPE_4OP)
-        {
-            const OpalChannel* pair = &chip->chan[chan->pairIndex];
-            operatorKeyOn(&chip->op[chan->opSlot[0]], OPAL_KEY_NORMAL);
-            operatorKeyOn(&chip->op[chan->opSlot[1]], OPAL_KEY_NORMAL);
-            operatorKeyOn(&chip->op[pair->opSlot[0]], OPAL_KEY_NORMAL);
-            operatorKeyOn(&chip->op[pair->opSlot[1]], OPAL_KEY_NORMAL);
-        }
-        else if (chan->chanType == OPAL_CHANNEL_TYPE_2OP || chan->chanType == OPAL_CHANNEL_TYPE_DRUM)
-        {
-            operatorKeyOn(&chip->op[chan->opSlot[0]], OPAL_KEY_NORMAL);
-            operatorKeyOn(&chip->op[chan->opSlot[1]], OPAL_KEY_NORMAL);
-        }
-    }
-    else
-    {
-        operatorKeyOn(&chip->op[chan->opSlot[0]], OPAL_KEY_NORMAL);
-        operatorKeyOn(&chip->op[chan->opSlot[1]], OPAL_KEY_NORMAL);
-    }
-}
-
-static void channelKeyOff(Opal* chip, const OpalChannel* chan)
-{
-    if (chip->opl3Enabled)
-    {
-        if (chan->chanType == OPAL_CHANNEL_TYPE_4OP)
-        {
-            const OpalChannel* pair = &chip->chan[chan->pairIndex];
-            operatorKeyOff(&chip->op[chan->opSlot[0]], OPAL_KEY_NORMAL);
-            operatorKeyOff(&chip->op[chan->opSlot[1]], OPAL_KEY_NORMAL);
-            operatorKeyOff(&chip->op[pair->opSlot[0]], OPAL_KEY_NORMAL);
-            operatorKeyOff(&chip->op[pair->opSlot[1]], OPAL_KEY_NORMAL);
-        }
-        else if (chan->chanType == OPAL_CHANNEL_TYPE_2OP || chan->chanType == OPAL_CHANNEL_TYPE_DRUM)
-        {
-            operatorKeyOff(&chip->op[chan->opSlot[0]], OPAL_KEY_NORMAL);
-            operatorKeyOff(&chip->op[chan->opSlot[1]], OPAL_KEY_NORMAL);
-        }
-    }
-    else
-    {
-        operatorKeyOff(&chip->op[chan->opSlot[0]], OPAL_KEY_NORMAL);
-        operatorKeyOff(&chip->op[chan->opSlot[1]], OPAL_KEY_NORMAL);
-    }
-}
-
-static void channelSet4Op(Opal* self, uint8_t data)
-{
-    for (uint8_t bit = 0; bit < 6; bit++)
-    {
-        uint8_t chNum = bit;
-        if (bit >= 3)
-        {
-            chNum = (uint8_t)(bit + 9 - 3);
-        }
-
-        OpalChannel* primary = &self->chan[chNum];
-        OpalChannel* secondary = &self->chan[chNum + 3];
-
-        if ((data >> bit) & 1)
-        {
-            primary->chanType = OPAL_CHANNEL_TYPE_4OP;
-            secondary->chanType = OPAL_CHANNEL_TYPE_4OP2;
-            primary->pairIndex = (uint8_t)(chNum + 3);
-            channelUpdateAlg(self, primary);
-        }
-        else
-        {
-            primary->chanType = OPAL_CHANNEL_TYPE_2OP;
-            secondary->chanType = OPAL_CHANNEL_TYPE_2OP;
-            channelUpdateAlg(self, primary);
-            channelUpdateAlg(self, secondary);
-        }
-    }
-}
-
-static int32_t channelAccumOutput(const Opal* chip, const OpalChannel* chan)
-{
-    int32_t accm = 0;
-    for (int i = 0; i < 4; i++)
-    {
-        if (chan->outSource[i] != OPAL_OP_NONE)
-        {
-            accm += chip->op[chan->outSource[i]].out;
-        }
-    }
-    return accm;
-}
-
-static int32_t channelMix(const Opal* chip, const OpalChannel* chan, uint16_t enable)
-{
-    if (!chip->opl3Enabled)
-    {
-        if (chan->chanIndex >= 9)
-        {
-            return 0;
-        }
-        enable = 0xFFFF;
-    }
-
-    int32_t accm = channelAccumOutput(chip, chan);
-    return (int32_t)((int16_t)(accm & (int16_t)enable));
-}
-
-static void opalRefreshNew(Opal* self)
-{
-    for (int i = 0; i < OPAL_CHANNEL_COUNT; i++)
-    {
-        channelUpdateAlg(self, &self->chan[i]);
-    }
 }
 
 static void opalTickTimer(Opal* self, int t)
@@ -1043,132 +198,834 @@ static void opalTickTimer(Opal* self, int t)
     }
     if (++self->timerCount[t] > 0xFF)
     {
+        uint8_t flag = (uint8_t)(0x40 >> t);
         self->timerCount[t] = self->timer[t];
-        self->status |= (uint8_t)(0x40 >> t);
-        if (!(self->timerControl & (uint8_t)(0x40 >> t)))
+        if (!(self->timerControl & flag))
         {
-            self->status |= 0x80;
+            self->status |= (uint8_t)(flag | 0x80u);
         }
     }
 }
 
-static void opalAdvanceLfos(Opal* self)
+static int32_t opalFloorShift(int32_t value, unsigned bits)
 {
-    if ((self->chipTimer & 0x3F) == 0x3F)
+    if (value >= 0)
     {
-        self->tremoloPos = (uint8_t)((self->tremoloPos + 1) % 210);
+        return value >> bits;
+    }
+    return ~(~value >> bits);
+}
+
+static bool channelIsPairTail(unsigned ch)
+{
+    return (ch % OPAL_CHANNELS_PER_BANK) / OPAL_PAIRS_PER_BANK == 1u;
+}
+
+static unsigned channelPairBit(unsigned ch)
+{
+    return (ch / OPAL_CHANNELS_PER_BANK) * OPAL_PAIRS_PER_BANK + ch % OPAL_PAIRS_PER_BANK;
+}
+
+static bool channelIsPaired(const Opal* self, unsigned ch)
+{
+    if (ch % OPAL_CHANNELS_PER_BANK >= 2u * OPAL_PAIRS_PER_BANK)
+    {
+        return false;
+    }
+    return ((self->pairEnable >> channelPairBit(ch)) & 1u) != 0;
+}
+
+static bool channelBorrowsPitch(const Opal* self, unsigned ch)
+{
+    return channelIsPairTail(ch) && channelIsPaired(self, ch);
+}
+
+static bool channelIsRhythm(const Opal* self, unsigned ch)
+{
+    return self->rhythmMode && ch >= OPAL_BASS_DRUM_CHANNEL && ch < OPAL_CHANNELS_PER_BANK;
+}
+
+static unsigned channelPickAlgorithm(const Opal* self, unsigned ch)
+{
+    const OpalChannel* chan = &self->chan[ch];
+
+    if (channelIsRhythm(self, ch))
+    {
+        if (ch != OPAL_BASS_DRUM_CHANNEL)
+        {
+            return OPAL_ALGORITHM_PERCUSSION;
+        }
+        return chan->connection ? OPAL_ALGORITHM_KICK_DIRECT : OPAL_ALGORITHM_KICK_FM;
+    }
+    if (channelIsPaired(self, ch))
+    {
+        const OpalChannel* partner = &self->chan[chan->pairIndex];
+        const OpalChannel* lead = channelIsPairTail(ch) ? partner : chan;
+        const OpalChannel* tail = channelIsPairTail(ch) ? chan : partner;
+        return OPAL_ALGORITHM_CHAIN + 2u * lead->connection + tail->connection;
+    }
+    return chan->connection ? OPAL_ALGORITHM_ADDITIVE : OPAL_ALGORITHM_FM;
+}
+
+static const OpalAlgorithm* channelAlgorithm(const OpalChannel* chan)
+{
+    return &opalAlgorithms[chan->algorithm];
+}
+
+static bool channelSpansPair(const OpalChannel* chan)
+{
+    return channelAlgorithm(chan)->operatorCount == 4u;
+}
+
+static bool channelCarriesVoice(const OpalChannel* chan, unsigned ch)
+{
+    return !channelSpansPair(chan) || channelIsPairTail(ch);
+}
+
+static unsigned channelVoiceBase(const Opal* self, unsigned ch)
+{
+    const OpalChannel* chan = &self->chan[ch];
+    if (channelSpansPair(chan) && channelIsPairTail(ch))
+    {
+        return self->chan[chan->pairIndex].opSlot[0];
+    }
+    return chan->opSlot[0];
+}
+
+static bool algorithmFeedsBack(const OpalAlgorithm* algorithm, unsigned position)
+{
+    return position == 0 && algorithm->selfFeedback;
+}
+
+static bool algorithmChains(const OpalAlgorithm* algorithm, unsigned position)
+{
+    return ((algorithm->chainMask >> position) & 1u) != 0;
+}
+
+static bool algorithmHears(const OpalAlgorithm* algorithm, unsigned position)
+{
+    return ((algorithm->carrierMask >> position) & 1u) != 0;
+}
+
+static unsigned operatorVoicePosition(const Opal* self, unsigned slot)
+{
+    unsigned ch = operatorOwner[slot];
+    const OpalChannel* owner = &self->chan[ch];
+    unsigned position = slot == owner->opSlot[0] ? 0u : 1u;
+
+    if (channelSpansPair(owner) && channelIsPairTail(ch))
+    {
+        position += 2u;
+    }
+    return position;
+}
+
+static int channelRoleView(const Opal* self, unsigned ch)
+{
+    if (channelIsRhythm(self, ch))
+    {
+        return OPAL_CHANNEL_TYPE_DRUM;
+    }
+    if (!channelIsPaired(self, ch))
+    {
+        return OPAL_CHANNEL_TYPE_2OP;
+    }
+    return channelIsPairTail(ch) ? OPAL_CHANNEL_TYPE_4OP2 : OPAL_CHANNEL_TYPE_4OP;
+}
+
+static void opalPublishRouting(Opal* self)
+{
+    for (unsigned slot = 0; slot < OPAL_OPERATOR_COUNT; slot++)
+    {
+        const OpalAlgorithm* algorithm = channelAlgorithm(&self->chan[operatorOwner[slot]]);
+        unsigned position = operatorVoicePosition(self, slot);
+        uint8_t source = OPAL_OP_NONE;
+
+        if (algorithmFeedsBack(algorithm, position))
+        {
+            source = OPAL_MOD_OWN_FB;
+        }
+        else if (algorithmChains(algorithm, position))
+        {
+            source = (uint8_t)(slot - OPAL_VOICE_STRIDE);
+        }
+        self->op[slot].modSource = source;
     }
 
-    if (self->tremoloPos < 105)
+    for (unsigned ch = 0; ch < OPAL_CHANNEL_COUNT; ch++)
     {
-        self->tremoloLevel = (uint8_t)(self->tremoloPos >> self->tremoloShift);
+        OpalChannel* chan = &self->chan[ch];
+        const OpalAlgorithm* algorithm = channelAlgorithm(chan);
+        unsigned base = channelVoiceBase(self, ch);
+        unsigned entry = 0;
+
+        chan->chanType = channelRoleView(self, ch);
+        memset(chan->outSource, OPAL_OP_NONE, sizeof(chan->outSource));
+        if (!channelCarriesVoice(chan, ch))
+        {
+            continue;
+        }
+        for (unsigned position = 0; position < algorithm->operatorCount; position++)
+        {
+            if (!algorithmHears(algorithm, position))
+            {
+                continue;
+            }
+            for (unsigned copy = 0; copy < algorithm->gain; copy++)
+            {
+                chan->outSource[entry++] = (uint8_t)(base + OPAL_VOICE_STRIDE * position);
+            }
+        }
+    }
+}
+
+static void opalRefreshRouting(Opal* self)
+{
+    for (unsigned ch = 0; ch < OPAL_CHANNEL_COUNT; ch++)
+    {
+        self->chan[ch].algorithm = (uint8_t)channelPickAlgorithm(self, ch);
+    }
+    opalPublishRouting(self);
+}
+
+static void channelKey(Opal* self, const OpalChannel* chan, unsigned slotCount, unsigned key)
+{
+    for (unsigned i = 0; i < slotCount; i++)
+    {
+        OpalOperator* op = &self->op[chan->opSlot[i]];
+        op->key = (uint8_t)((op->key & 2u) | key);
+    }
+}
+
+static void channelLatchKeyScale(const Opal* self, OpalChannel* chan)
+{
+    unsigned noteBit = ((unsigned)chan->fNumber >> (self->noteSelect ? 8 : 9)) & 1u;
+    chan->latchedKeyScaleNumber = (uint8_t)(2u * chan->block + noteBit);
+}
+
+static void channelWriteFrequency(Opal* self, unsigned ch, bool high, uint8_t val)
+{
+    OpalChannel* chan = &self->chan[ch];
+
+    if (high)
+    {
+        chan->fNumber = (uint16_t)((chan->fNumber & 0xFFu) | ((val & 3u) << 8));
+        chan->block = (uint8_t)((val >> 2) & 7u);
     }
     else
     {
-        self->tremoloLevel = (uint8_t)((210 - self->tremoloPos) >> self->tremoloShift);
+        chan->fNumber = (uint16_t)((chan->fNumber & 0x300u) | val);
     }
 
-    if ((self->chipTimer & 0x3FF) == 0x3FF)
+    if (channelBorrowsPitch(self, ch))
     {
-        self->vibPos = (uint8_t)((self->vibPos + 1) & 7);
+        return;
     }
 
-    self->chipTimer++;
-
-    if (self->egState)
+    channelLatchKeyScale(self, chan);
+    if (high)
     {
-        uint8_t shift = 0;
-        while (shift < 13 && ((self->egTimer >> shift) & 1) == 0)
+        channelKey(self, chan, channelIsPaired(self, ch) ? 4u : 2u, (val >> 5) & 1u);
+    }
+}
+
+static void channelWriteConnection(Opal* self, unsigned ch, uint8_t val)
+{
+    OpalChannel* chan = &self->chan[ch];
+    unsigned sides = self->newMode ? (val >> 4) & OPAL_OUTPUT_BOTH_SIDES : OPAL_OUTPUT_BOTH_SIDES;
+    chan->outputEnable = (uint8_t)sides;
+    chan->feedback = (uint8_t)((val >> 1) & 7u);
+    chan->connection = (uint8_t)(val & 1u);
+    opalRefreshRouting(self);
+}
+
+static void opalWritePairing(Opal* self, uint8_t val)
+{
+    unsigned enabled = val & OPAL_PAIR_ENABLE_MASK;
+    unsigned released = self->pairEnable & ~enabled;
+
+    self->pairEnable = (uint8_t)enabled;
+    for (unsigned ch = 0; ch < OPAL_CHANNEL_COUNT; ch++)
+    {
+        if (channelIsPairTail(ch) && ((released >> channelPairBit(ch)) & 1u))
         {
-            shift++;
+            channelLatchKeyScale(self, &self->chan[ch]);
         }
-        self->egAdd = (uint8_t)(shift > 12 ? 0 : shift + 1);
-        self->egTimerLo = (uint8_t)(self->egTimer & 3u);
+    }
+    opalRefreshRouting(self);
+}
+
+static void operatorWrite(const Opal* self, OpalOperator* op, unsigned group, uint8_t val)
+{
+    switch (group)
+    {
+        case 0x20:
+            op->tremolo = (uint8_t)(val >> 7);
+            op->vibrato = (uint8_t)((val >> 6) & 1u);
+            op->sustainHold = (uint8_t)((val >> 5) & 1u);
+            op->keyScaleRate = (uint8_t)((val >> 4) & 1u);
+            op->multiple = (uint8_t)(val & 15u);
+            break;
+        case 0x40:
+            op->keyScaleLevel = (uint8_t)(val >> 6);
+            op->totalLevel = (uint8_t)(val & 63u);
+            break;
+        case 0x60:
+            op->attackRate = (uint8_t)(val >> 4);
+            op->decayRate = (uint8_t)(val & 15u);
+            break;
+        case 0x80:
+            op->sustainLevel = (uint8_t)(val >> 4);
+            op->releaseRate = (uint8_t)(val & 15u);
+            break;
+        default:
+            op->waveform = (uint8_t)(val & (self->newMode ? OPAL_WAVEFORM_MASK_NEW : OPAL_WAVEFORM_MASK_OPL2));
+            break;
+    }
+}
+
+static void opalWriteRhythm(Opal* self, uint8_t val)
+{
+    self->tremoloDepth = (uint8_t)(val >> 7);
+    self->vibratoDepth = (uint8_t)((val >> 6) & 1u);
+    self->rhythmMode = (uint8_t)((val >> 5) & 1u);
+
+    for (unsigned i = 0; i < 6; i++)
+    {
+        OpalOperator* op = &self->op[OPAL_RHYTHM_FIRST_SLOT + i];
+        unsigned key = self->rhythmMode ? (val >> rhythmKeyBit[i]) & 1u : 0u;
+        op->key = (uint8_t)((op->key & 1u) | (key << 1));
+    }
+    opalRefreshRouting(self);
+}
+
+static void opalWriteTimerControl(Opal* self, uint8_t val)
+{
+    if (val & 0x80u)
+    {
+        self->status = 0;
+        return;
     }
 
-    if (self->egTimerRem || self->egState)
+    unsigned started = (unsigned)val & ~(unsigned)self->timerControl;
+    if (started & 1u)
     {
-        if (self->egTimer == UINT64_C(0xFFFFFFFFF))
+        self->timerCount[0] = self->timer[0];
+    }
+    if (started & 2u)
+    {
+        self->timerCount[1] = self->timer[1];
+    }
+    self->timerControl = val;
+    self->status = (uint8_t)(self->status & ~(val & 0x60u));
+    if ((self->status & 0x60u) == 0)
+    {
+        self->status = 0;
+    }
+}
+
+static void opalWriteControl(Opal* self, unsigned reg, uint8_t val)
+{
+    switch (reg)
+    {
+        case 0x001:
+            self->waveSelectEnable = (uint8_t)((val >> 5) & 1u);
+            break;
+        case 0x002:
+            self->timer[0] = val;
+            break;
+        case 0x003:
+            self->timer[1] = val;
+            break;
+        case 0x004:
+            opalWriteTimerControl(self, val);
+            break;
+        case 0x008:
+            self->noteSelect = (uint8_t)((val >> 6) & 1u);
+            self->compositeSine = (uint8_t)(val >> 7);
+            break;
+        case OPAL_FOUR_OP_REGISTER:
+            opalWritePairing(self, val);
+            break;
+        case OPAL_NEW_REGISTER:
+            self->newMode = (uint8_t)(val & 1u);
+            break;
+        default:
+            break;
+    }
+}
+
+static void opalWrite(Opal* self, uint16_t regNum, uint8_t val)
+{
+    unsigned reg = regNum & 0x1FFu;
+    if (!self->newMode && reg != OPAL_NEW_REGISTER)
+    {
+        reg &= 0xFFu;
+    }
+
+    unsigned bank = reg >> 8;
+    unsigned addr = reg & 0xFFu;
+
+    if (addr < 0x20u)
+    {
+        opalWriteControl(self, reg, val);
+    }
+    else if (addr < 0xA0u || addr >= 0xE0u)
+    {
+        unsigned row = (addr & 0x1Fu) >> 3;
+        unsigned column = addr & 7u;
+        if (row < 3 && column < 6)
         {
-            self->egTimer = 0;
-            self->egTimerRem = 1;
+            OpalOperator* op = &self->op[bank * OPAL_OPERATORS_PER_BANK + row * 6 + column];
+            operatorWrite(self, op, addr & 0xE0u, val);
+        }
+    }
+    else if (reg == OPAL_RHYTHM_REGISTER)
+    {
+        opalWriteRhythm(self, val);
+    }
+    else if (addr < 0xD0u && (addr & 0x0Fu) < OPAL_CHANNELS_PER_BANK)
+    {
+        unsigned ch = bank * OPAL_CHANNELS_PER_BANK + (addr & 0x0Fu);
+        unsigned group = addr & 0xF0u;
+        if (group == 0xC0u)
+        {
+            channelWriteConnection(self, ch, val);
         }
         else
         {
-            self->egTimer++;
-            self->egTimerRem = 0;
+            channelWriteFrequency(self, ch, group == 0xB0u, val);
         }
     }
-
-    self->egState ^= 1;
 }
 
-static void opalOutput(Opal* self, int16_t* left, int16_t* right)
+static void opalApplyQueuedWrite(Opal* self)
 {
-    int32_t leftMix = 0;
-    int32_t rightMix = 0;
-    int i;
+    OpalQueuedWrite entry = self->queue[self->queueHead];
+    self->queueHead = (uint16_t)((self->queueHead + 1u) % OPAL_WRITEBUF_SIZE);
+    self->queueCount = (uint16_t)(self->queueCount - 1u);
+    opalWrite(self, entry.regNum, entry.value);
+}
 
-    /* YMF262 right channel is one sample behind left (mixbuff quirk). */
-    *right = opalClipSample(self->mixBuffRight);
+static const OpalChannel* operatorPitchChannel(const Opal* self, unsigned slot)
+{
+    unsigned ch = operatorOwner[slot];
+    const OpalChannel* owner = &self->chan[ch];
 
-    // YMF262 slot pipeline: slots 0-14, mix left (cha), slots 15-32, mix right (chb), slots 33-35.
-    for (i = 0; i < 15; i++)
+    if (channelBorrowsPitch(self, ch))
     {
-        operatorProcess(self, &self->op[i]);
+        return &self->chan[owner->pairIndex];
+    }
+    return owner;
+}
+
+static unsigned channelKeyScaleAttenuation(const OpalChannel* chan)
+{
+    int attenuation = 4 * kslRom[chan->fNumber >> 6] - 32 * (8 - chan->block);
+    return attenuation > 0 ? (unsigned)attenuation : 0u;
+}
+
+static unsigned operatorKeyScaleLevel(const OpalOperator* op, const OpalChannel* pitch)
+{
+    unsigned full = channelKeyScaleAttenuation(pitch);
+
+    switch (op->keyScaleLevel)
+    {
+        case 1:
+            return full / 2u;
+        case 2:
+            return full / 4u;
+        case 3:
+            return full;
+        default:
+            return 0;
+    }
+}
+
+static OpalEnvelopeTime opalEnvelopeTime(const Opal* self)
+{
+    OpalEnvelopeTime time;
+    uint64_t pairs = self->chipSamples >> 1;
+
+    time.odd = (self->chipSamples & 1u) != 0;
+    time.count = pairs < 2u ? 0u : (pairs - 2u) % OPAL_ENVELOPE_PERIOD + 1u;
+    return time;
+}
+
+static bool envelopeSlowStepDue(uint64_t count, unsigned group, unsigned fraction)
+{
+    uint64_t period = UINT64_C(1) << (OPAL_RATE_FAST / 4u - group);
+
+    if (count % period == period / 2u)
+    {
+        return true;
+    }
+    if ((fraction & 2u) && count % (2u * period) == period)
+    {
+        return true;
+    }
+    return (fraction & 1u) && count % (4u * period) == 2u * period;
+}
+
+static unsigned operatorEnvelopeSpeed(unsigned registerRate, unsigned actualRate, OpalEnvelopeTime time)
+{
+    unsigned fraction = actualRate & 3u;
+
+    if (registerRate == 0)
+    {
+        return 0;
+    }
+    if (actualRate >= OPAL_RATE_INSTANT)
+    {
+        return 4;
+    }
+    if (actualRate >= OPAL_RATE_FAST)
+    {
+        unsigned pairPosition = (unsigned)(time.count & 3u);
+        unsigned spread = ((pairPosition & 1u) << 1) | (pairPosition >> 1);
+        unsigned pairUnits = (spread < fraction ? 2u : 1u) << ((actualRate - OPAL_RATE_FAST) >> 2);
+        return (pairUnits >> 1) | (time.odd ? pairUnits & 1u : 0u);
+    }
+    if (time.odd && envelopeSlowStepDue(time.count, actualRate >> 2, fraction))
+    {
+        return 1;
+    }
+    return 0;
+}
+
+static bool operatorEnvelope(OpalOperator* op, const OpalChannel* pitch, OpalEnvelopeTime time)
+{
+    bool keyActive = op->key != 0;
+    int stage = op->envelopeStage;
+    bool keyOn = keyActive && stage == OPAL_ENVELOPE_STAGE_RELEASE;
+    unsigned level = op->envelope;
+    unsigned rate = op->releaseRate;
+
+    if (keyOn || stage == OPAL_ENVELOPE_STAGE_ATTACK)
+    {
+        rate = op->attackRate;
+    }
+    else if (stage == OPAL_ENVELOPE_STAGE_DECAY)
+    {
+        rate = op->decayRate;
+    }
+    else if (stage == OPAL_ENVELOPE_STAGE_SUSTAIN && op->sustainHold)
+    {
+        rate = 0;
     }
 
-    for (i = 0; i < OPAL_CHANNEL_COUNT; i++)
+    unsigned keyScale = pitch->latchedKeyScaleNumber;
+    unsigned rateOffset = op->keyScaleRate ? keyScale : keyScale >> 2;
+    unsigned actualRate = 4u * rate + rateOffset;
+    bool instant = actualRate >= OPAL_RATE_INSTANT;
+    unsigned speed = operatorEnvelopeSpeed(rate, actualRate, time);
+    unsigned sustainBand = op->sustainLevel == 15 ? 31u : op->sustainLevel;
+    bool offZone = level >= OPAL_ENVELOPE_OFF_ZONE;
+
+    if (keyOn)
     {
-        OpalChannel* chan = &self->chan[i];
-        int32_t cha = channelMix(self, chan, chan->cha);
-        leftMix += (cha * chan->leftPan) >> 8;
+        if (instant)
+        {
+            level = 0;
+        }
+        stage = OPAL_ENVELOPE_STAGE_ATTACK;
+    }
+    else if (stage == OPAL_ENVELOPE_STAGE_ATTACK)
+    {
+        if (level == 0)
+        {
+            stage = OPAL_ENVELOPE_STAGE_DECAY;
+        }
+        else if (keyActive && !instant)
+        {
+            level -= (speed * (level + 1u) + 7u) >> 3;
+        }
+    }
+    else if (stage == OPAL_ENVELOPE_STAGE_DECAY && (level >> 4) == sustainBand)
+    {
+        if (offZone)
+        {
+            level = OPAL_ENVELOPE_SILENT;
+        }
+        stage = OPAL_ENVELOPE_STAGE_SUSTAIN;
+    }
+    else if (offZone)
+    {
+        level = OPAL_ENVELOPE_SILENT;
+    }
+    else
+    {
+        level += speed;
     }
 
-    for (i = 15; i < 18; i++)
+    if (!keyActive)
     {
-        operatorProcess(self, &self->op[i]);
+        stage = OPAL_ENVELOPE_STAGE_RELEASE;
     }
 
-    for (i = 18; i < 33; i++)
+    op->envelope = (uint16_t)level;
+    op->envelopeStage = stage;
+    return keyOn;
+}
+
+static uint32_t operatorIncrement(const Opal* self, const OpalOperator* op, const OpalChannel* pitch)
+{
+    int fNumber = pitch->fNumber;
+
+    if (op->vibrato)
     {
-        operatorProcess(self, &self->op[i]);
+        int fNumberHigh = fNumber >> 7;
+        int depthShift = self->vibratoDepth ? 0 : 1;
+        unsigned position = ((unsigned)self->sampleCounter >> 10) & 7u;
+        const OpalVibratoStep* step = &vibratoSteps[position];
+        int magnitude = ((fNumberHigh * (int)step->halves) >> 1) >> depthShift;
+        fNumber += step->negative ? -magnitude : magnitude;
     }
 
-    for (i = 0; i < OPAL_CHANNEL_COUNT; i++)
+    uint32_t base = ((uint32_t)fNumber << pitch->block) >> 1;
+    return (base * mulTimes2[op->multiple]) >> 1;
+}
+
+static unsigned opalCymbalBit(const Opal* self)
+{
+    unsigned hat = self->hiHatPhase;
+    unsigned cymbal = self->cymbalPhase;
+    return (((hat >> 2) ^ (hat >> 7)) | ((hat >> 3) ^ (cymbal >> 5)) | ((cymbal >> 3) ^ (cymbal >> 5))) & 1u;
+}
+
+static unsigned opalRhythmPhase(Opal* self, unsigned slot, unsigned phase, unsigned noiseBit)
+{
+    if (slot == OPAL_HI_HAT_SLOT)
     {
-        OpalChannel* chan = &self->chan[i];
-        int32_t chb = channelMix(self, chan, chan->chb);
-        rightMix += (chb * chan->rightPan) >> 8;
+        unsigned cymbalBit = opalCymbalBit(self);
+        return (cymbalBit << 9) | ((cymbalBit ^ noiseBit) ? OPAL_HI_HAT_PHASE_NOISY : OPAL_HI_HAT_PHASE_QUIET);
+    }
+    if (slot == OPAL_SNARE_SLOT)
+    {
+        unsigned hatBit = ((unsigned)self->hiHatPhase >> 8) & 1u;
+        return (hatBit << 9) | ((hatBit ^ noiseBit) << 8);
+    }
+    if (slot == OPAL_CYMBAL_SLOT)
+    {
+        self->cymbalPhase = (uint16_t)phase;
+        return (opalCymbalBit(self) << 9) | OPAL_CYMBAL_PHASE;
+    }
+    return phase;
+}
+
+static OpalWave operatorWave(unsigned phase, unsigned waveform)
+{
+    bool secondHalf = (phase & 0x200u) != 0;
+    bool secondQuarter = (phase & 0x100u) != 0;
+    unsigned halfPosition = phase & 0x1FFu;
+    unsigned quarterPosition = phase & 0xFFu;
+    uint16_t sine = logSinTable[secondQuarter ? 0xFFu - quarterPosition : quarterPosition];
+    unsigned eighthPosition = 2u * (phase & 0x7Fu);
+    uint16_t fastSine = logSinTable[(phase & 0x80u) ? 254u - eighthPosition : eighthPosition];
+    OpalWave wave = {0, false, false};
+
+    switch (waveform)
+    {
+        case 0:
+            wave.attenuation = sine;
+            wave.negative = secondHalf;
+            break;
+        case 1:
+            wave.attenuation = sine;
+            wave.silent = secondHalf;
+            break;
+        case 2:
+            wave.attenuation = sine;
+            break;
+        case 3:
+            wave.attenuation = logSinTable[quarterPosition];
+            wave.silent = secondQuarter;
+            break;
+        case 4:
+            wave.attenuation = fastSine;
+            wave.negative = !secondHalf && secondQuarter;
+            wave.silent = secondHalf;
+            break;
+        case 5:
+            wave.attenuation = fastSine;
+            wave.silent = secondHalf;
+            break;
+        case 6:
+            wave.negative = secondHalf;
+            break;
+        default:
+            wave.attenuation = (uint16_t)(8u * (secondHalf ? 0x1FFu - halfPosition : halfPosition));
+            wave.negative = secondHalf;
+            break;
+    }
+    return wave;
+}
+
+static int16_t operatorOutput(OpalWave wave, unsigned attenuation)
+{
+    if (wave.silent)
+    {
+        return 0;
     }
 
-    for (i = 33; i < OPAL_OPERATOR_COUNT; i++)
+    unsigned level = wave.attenuation + 8u * attenuation;
+    int magnitude = 0;
+    if (level < OPAL_AUDIBLE_LEVEL_LIMIT)
     {
-        operatorProcess(self, &self->op[i]);
+        unsigned mantissa = OPAL_EXPONENT_IMPLICIT_ONE + exponentRom[0xFFu - (level & 0xFFu)];
+        magnitude = (int)((2u * mantissa) >> (level >> 8));
+    }
+    return (int16_t)(wave.negative ? -magnitude - 1 : magnitude);
+}
+
+static int32_t operatorModulation(const Opal* self, unsigned slot)
+{
+    const OpalChannel* owner = &self->chan[operatorOwner[slot]];
+    const OpalAlgorithm* algorithm = channelAlgorithm(owner);
+    unsigned position = operatorVoicePosition(self, slot);
+
+    if (algorithmFeedsBack(algorithm, position))
+    {
+        const OpalOperator* op = &self->op[slot];
+        if (owner->feedback == 0)
+        {
+            return 0;
+        }
+        return opalFloorShift((int32_t)op->out + op->prevOut, 9u - owner->feedback);
+    }
+    if (algorithmChains(algorithm, position))
+    {
+        return self->op[slot - OPAL_VOICE_STRIDE].out;
+    }
+    return 0;
+}
+
+static void operatorTurn(Opal* self, unsigned slot, OpalEnvelopeTime time)
+{
+    OpalOperator* op = &self->op[slot];
+    const OpalChannel* pitch = operatorPitchChannel(self, slot);
+
+    unsigned attenuation = op->envelope + 4u * op->totalLevel + operatorKeyScaleLevel(op, pitch);
+    if (op->tremolo)
+    {
+        attenuation += self->tremoloLevel;
+    }
+    op->egOut = (uint16_t)attenuation;
+
+    bool restart = operatorEnvelope(op, pitch, time);
+
+    unsigned phase = (op->phase >> 9) & 0xFFFFu;
+    uint32_t increment = operatorIncrement(self, op, pitch);
+    op->phase = restart ? increment : op->phase + increment;
+
+    unsigned noiseBit = self->noise & 1u;
+    self->noise = (self->noise >> 1) | (((self->noise ^ (self->noise >> 14)) & 1u) << 22);
+
+    if (slot == OPAL_HI_HAT_SLOT)
+    {
+        self->hiHatPhase = (uint16_t)phase;
+    }
+    if (self->rhythmMode)
+    {
+        phase = opalRhythmPhase(self, slot, phase, noiseBit);
     }
 
-    *left = opalClipSample(leftMix);
-    self->mixBuffRight = rightMix;
+    int32_t modulation = operatorModulation(self, slot);
+    unsigned finalPhase = (unsigned)((int32_t)phase + modulation) & 0x3FFu;
 
-    opalAdvanceLfos(self);
+    op->prevOut = op->out;
+    op->out = operatorOutput(operatorWave(finalPhase, op->waveform), attenuation);
+}
 
-    if ((self->chipTimer & 3) == 0)
+static int32_t channelVoiceSum(const Opal* self, unsigned ch)
+{
+    const OpalChannel* chan = &self->chan[ch];
+    const OpalAlgorithm* algorithm = channelAlgorithm(chan);
+    unsigned base = channelVoiceBase(self, ch);
+    int32_t sum = 0;
+
+    if (!channelCarriesVoice(chan, ch))
+    {
+        return 0;
+    }
+    for (unsigned position = 0; position < algorithm->operatorCount; position++)
+    {
+        if (algorithmHears(algorithm, position))
+        {
+            sum += self->op[base + OPAL_VOICE_STRIDE * position].out;
+        }
+    }
+    return sum * algorithm->gain;
+}
+
+static int32_t opalMix(const Opal* self, unsigned side)
+{
+    int32_t sum = 0;
+
+    for (unsigned ch = 0; ch < OPAL_CHANNEL_COUNT; ch++)
+    {
+        const OpalChannel* chan = &self->chan[ch];
+        if (!((chan->outputEnable >> side) & 1u))
+        {
+            continue;
+        }
+
+        int32_t gain = side ? chan->rightPan : chan->leftPan;
+        sum += opalFloorShift(channelVoiceSum(self, ch) * gain, 8);
+    }
+    return sum;
+}
+
+static void opalCloseSample(Opal* self)
+{
+    self->sampleCounter = (uint16_t)(self->sampleCounter + 1u);
+    if ((self->sampleCounter & 63u) == 0)
+    {
+        self->tremoloPosition = (uint8_t)((self->tremoloPosition + 1u) % OPAL_TREMOLO_STEPS);
+    }
+    unsigned position = self->tremoloPosition;
+    unsigned triangle = position < OPAL_TREMOLO_PEAK ? position : OPAL_TREMOLO_STEPS - position;
+    self->tremoloLevel = (uint8_t)(triangle >> (self->tremoloDepth ? 2 : 4));
+
+    if ((self->sampleCounter & 3u) == 0)
     {
         opalTickTimer(self, 0);
     }
-    if ((self->chipTimer & 15) == 0)
+    if ((self->sampleCounter & 15u) == 0)
     {
         opalTickTimer(self, 1);
     }
 
-    OpalWriteBuf* wb;
-    while ((wb = &self->writeBuf[self->writeBufCur]), (wb->reg & 0x200) && wb->time <= self->writeBufSampleCount)
+    while (self->queueCount > 0 && self->queue[self->queueHead].due <= self->chipSamples)
     {
-        opalWriteReg(self, wb->reg & 0x1FF, wb->data);
-        wb->reg = 0;
-        self->writeBufCur = (self->writeBufCur + 1) % OPAL_WRITEBUF_SIZE;
+        opalApplyQueuedWrite(self);
     }
-    self->writeBufSampleCount++;
+    self->chipSamples++;
+}
+
+static void opalOutput(Opal* self, int16_t* left, int16_t* right)
+{
+    OpalEnvelopeTime time = opalEnvelopeTime(self);
+    int32_t leftSum = 0;
+    int32_t rightSum = 0;
+
+    for (unsigned slot = 0; slot < OPAL_OPERATOR_COUNT; slot++)
+    {
+        operatorTurn(self, slot, time);
+        if (slot == OPAL_LEFT_SUM_SLOT)
+        {
+            leftSum = opalMix(self, 0);
+        }
+        else if (slot == OPAL_RIGHT_SUM_SLOT)
+        {
+            rightSum = opalMix(self, 1);
+        }
+    }
+
+    *left = opalSaturate(leftSum);
+    *right = opalSaturate(self->pendingRight);
+    self->pendingRight = rightSum;
+    opalCloseSample(self);
 }
 
 void opalSample(Opal* self, int16_t* left, int16_t* right)
@@ -1194,342 +1051,18 @@ void opalSetSampleRate(Opal* self, int sampleRate)
     {
         sampleRate = OPAL_OPL3_SAMPLE_RATE;
     }
+    else if (sampleRate > INT32_MAX - OPAL_OPL3_SAMPLE_RATE)
+    {
+        sampleRate = INT32_MAX - OPAL_OPL3_SAMPLE_RATE;
+    }
 
     self->sampleRate = sampleRate;
     self->sampleAccum = 0;
-    self->lastOutput[0] = self->lastOutput[1] = 0;
-    self->currOutput[0] = self->currOutput[1] = 0;
-    self->mixBuffRight = 0;
-    self->writeBufSampleCount = 0;
-    self->writeBufCur = 0;
-    self->writeBufLast = 0;
-    self->writeBufLastTime = 0;
-
-    for (uint32_t i = 0; i < OPAL_WRITEBUF_SIZE; i++)
-    {
-        self->writeBuf[i].reg = 0;
-    }
 }
 
 uint8_t opalReadStatus(Opal* self)
 {
     return self->status;
-}
-
-void opalInit(Opal* self, int sampleRate)
-{
-    memset(self, 0, sizeof *self);
-
-    for (int i = 0; i < OPAL_OPERATOR_COUNT; i++)
-    {
-        OpalOperator* op = &self->op[i];
-        op->slotIndex = (uint8_t)i;
-        op->freqMultTimes2 = 1;
-        op->envelopeStage = OPAL_ENVELOPE_STAGE_RELEASE;
-        op->envelopeLevel = 0x1FF;
-        op->egOut = 0x1FF;
-        op->modSource = OPAL_OP_NONE;
-    }
-
-    for (int i = 0; i < OPAL_CHANNEL_COUNT; i++)
-    {
-        OpalChannel* chan = &self->chan[i];
-        chan->chanIndex = (uint8_t)i;
-        chan->chanType = OPAL_CHANNEL_TYPE_2OP;
-        chan->leftPan = 256;
-        chan->rightPan = 256;
-
-        if ((i % 9) < 3)
-        {
-            chan->pairIndex = (uint8_t)(i + 3);
-        }
-        else if ((i % 9) < 6)
-        {
-            chan->pairIndex = (uint8_t)(i - 3);
-        }
-        else
-        {
-            chan->pairIndex = OPAL_CH_NONE;
-        }
-
-        uint8_t slot = chSlot[i];
-        chan->opSlot[0] = slot;
-        chan->opSlot[1] = (uint8_t)(slot + 3);
-        self->op[slot].chanIndex = (uint8_t)i;
-        self->op[slot + 3].chanIndex = (uint8_t)i;
-
-        if (i < 3 || (i >= 9 && i < 12))
-        {
-            chan->opSlot[2] = (uint8_t)(slot + 6);
-            chan->opSlot[3] = (uint8_t)(slot + 9);
-            self->op[slot + 6].chanIndex = (uint8_t)i;
-            self->op[slot + 9].chanIndex = (uint8_t)i;
-        }
-        else
-        {
-            chan->opSlot[2] = OPAL_OP_NONE;
-            chan->opSlot[3] = OPAL_OP_NONE;
-        }
-
-        channelSetupAlg(self, chan);
-    }
-
-    self->noise = 1;
-    self->tremoloShift = 4;
-    self->vibShift = 1;
-
-    opalSetSampleRate(self, sampleRate);
-}
-
-void opalWriteRegBuffered(Opal* self, uint16_t regNum, uint8_t val)
-{
-    uint32_t writeBufLast = self->writeBufLast;
-    uint32_t next = (writeBufLast + 1) % OPAL_WRITEBUF_SIZE;
-
-    if (next == self->writeBufCur)
-    {
-        opalFlushWriteBuf(self);
-        writeBufLast = self->writeBufLast;
-        next = (writeBufLast + 1) % OPAL_WRITEBUF_SIZE;
-    }
-
-    OpalWriteBuf* wb = &self->writeBuf[writeBufLast];
-
-    if (wb->reg & 0x200)
-    {
-        opalWriteReg(self, wb->reg & 0x1FF, wb->data);
-        self->writeBufCur = (writeBufLast + 1) % OPAL_WRITEBUF_SIZE;
-        self->writeBufSampleCount = wb->time;
-    }
-
-    wb->reg = (uint16_t)(regNum | 0x200);
-    wb->data = val;
-
-    uint64_t time1 = self->writeBufLastTime + OPAL_WRITEBUF_DELAY;
-    uint64_t time2 = self->writeBufSampleCount;
-    if (time1 < time2)
-    {
-        time1 = time2;
-    }
-
-    wb->time = time1;
-    self->writeBufLastTime = time1;
-    self->writeBufLast = (writeBufLast + 1) % OPAL_WRITEBUF_SIZE;
-}
-
-void opalFlushWriteBuf(Opal* self)
-{
-    uint32_t idx = self->writeBufCur;
-    while (idx != self->writeBufLast)
-    {
-        OpalWriteBuf* wb = &self->writeBuf[idx];
-        if (wb->reg & 0x200)
-        {
-            opalWriteReg(self, wb->reg & 0x1FF, wb->data);
-            wb->reg = 0;
-        }
-        idx = (idx + 1) % OPAL_WRITEBUF_SIZE;
-    }
-    self->writeBufCur = self->writeBufLast;
-    self->writeBufLastTime = self->writeBufSampleCount;
-}
-
-void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val)
-{
-    if (!self->opl3Enabled && (regNum & 0x100) != 0 && (regNum & 0x1FF) != 0x105)
-    {
-        /* YMF262: NEW=0 ignores A1 except register 105h. */
-        regNum &= 0xFF;
-    }
-
-    uint8_t high = (uint8_t)((regNum >> 8) & 1);
-    uint8_t regm = (uint8_t)(regNum & 0xFF);
-
-    if (regm == 0xBD && !high)
-    {
-        self->tremoloShift = (uint8_t)((((val >> 7) ^ 1) << 1) + 2);
-        self->vibShift = (uint8_t)(((val >> 6) & 1) ^ 1);
-        channelUpdateRhythm(self, val);
-        return;
-    }
-
-    switch (regm & 0xF0)
-    {
-        case 0x00:
-        {
-            if (high)
-            {
-                switch (regm & 0x0F)
-                {
-                    case 0x04:
-                    {
-                        channelSet4Op(self, val);
-                        break;
-                    }
-                    case 0x05:
-                    {
-                        bool enabled = (val & 1) != 0;
-                        if (self->opl3Enabled != enabled)
-                        {
-                            self->opl3Enabled = enabled;
-                            opalRefreshNew(self);
-                        }
-                        break;
-                    }
-                }
-            }
-            else
-            {
-                switch (regm & 0x0F)
-                {
-                    case 0x01:
-                    {
-                        self->waveformSelect = (val & 0x20) != 0;
-                        break;
-                    }
-                    case 0x02:
-                    {
-                        self->timer[0] = val;
-                        break;
-                    }
-                    case 0x03:
-                    {
-                        self->timer[1] = val;
-                        break;
-                    }
-                    case 0x04:
-                    {
-                        if (val & 0x80)
-                        {
-                            self->status = 0;
-                        }
-                        else
-                        {
-                            uint8_t prev = self->timerControl;
-                            self->timerControl = val;
-                            if ((val & 1) && !(prev & 1))
-                            {
-                                self->timerCount[0] = self->timer[0];
-                            }
-                            if ((val & 2) && !(prev & 2))
-                            {
-                                self->timerCount[1] = self->timer[1];
-                            }
-                        }
-                        break;
-                    }
-                    case 0x08:
-                    {
-                        self->noteSel = (val & 0x40) != 0;
-                        self->compositeSineWave = (val & 0x80) != 0;
-                        break;
-                    }
-                }
-            }
-            break;
-        }
-        case 0x20:
-        case 0x30:
-        {
-            int8_t slot = adSlot[regm & 0x1F];
-            if (slot < 0)
-            {
-                break;
-            }
-            OpalOperator* op = &self->op[18 * high + slot];
-            op->tremoloEnable = (val & 0x80) != 0;
-            op->vibratoEnable = (val & 0x40) != 0;
-            op->sustainMode = (val & 0x20) != 0;
-            op->keyScaleRate = (val & 0x10) != 0;
-            op->freqMultTimes2 = mulTimes2[val & 15];
-            break;
-        }
-        case 0x40:
-        case 0x50:
-        {
-            int8_t slot = adSlot[regm & 0x1F];
-            if (slot < 0)
-            {
-                break;
-            }
-            OpalOperator* op = &self->op[18 * high + slot];
-            op->keyScaleReg = (uint8_t)((val >> 6) & 3);
-            op->outputLevel = (uint16_t)((val & 0x3F) << 2);
-            operatorUpdateKsl(self, op);
-            break;
-        }
-        case 0x60:
-        case 0x70:
-        {
-            int8_t slot = adSlot[regm & 0x1F];
-            if (slot < 0)
-            {
-                break;
-            }
-            OpalOperator* op = &self->op[18 * high + slot];
-            op->attackRate = (uint16_t)(val >> 4);
-            op->decayRate = (uint16_t)(val & 15);
-            break;
-        }
-        case 0x80:
-        case 0x90:
-        {
-            int8_t slot = adSlot[regm & 0x1F];
-            if (slot < 0)
-            {
-                break;
-            }
-            OpalOperator* op = &self->op[18 * high + slot];
-            op->sustainLevel = (uint16_t)(((val >> 4) < 15 ? (val >> 4) : 31) << 4);
-            op->releaseRate = (uint16_t)(val & 15);
-            break;
-        }
-        case 0xE0:
-        case 0xF0:
-        {
-            int8_t slot = adSlot[regm & 0x1F];
-            if (slot < 0)
-            {
-                break;
-            }
-            OpalOperator* op = &self->op[18 * high + slot];
-            op->waveform = (uint16_t)(val & 7);
-            break;
-        }
-        case 0xA0:
-        {
-            if ((regm & 0x0F) < 9)
-            {
-                channelWriteA0(self, &self->chan[9 * high + (regm & 0x0F)], val);
-            }
-            break;
-        }
-        case 0xB0:
-        {
-            if ((regm & 0x0F) < 9)
-            {
-                OpalChannel* chan = &self->chan[9 * high + (regm & 0x0F)];
-                channelWriteB0(self, chan, val);
-                if (val & 0x20)
-                {
-                    channelKeyOn(self, chan);
-                }
-                else
-                {
-                    channelKeyOff(self, chan);
-                }
-            }
-            break;
-        }
-        case 0xC0:
-        {
-            if ((regm & 0x0F) < 9)
-            {
-                channelWriteC0(self, &self->chan[9 * high + (regm & 0x0F)], val);
-            }
-            break;
-        }
-    }
 }
 
 void opalPan(Opal* self, uint16_t channel, uint8_t pan)
@@ -1540,7 +1073,82 @@ void opalPan(Opal* self, uint16_t channel, uint8_t pan)
         return;
     }
 
+    if (pan > 127)
+    {
+        pan = 127;
+    }
+
     OpalChannel* chan = &self->chan[chanNum];
     chan->leftPan = (uint16_t)(pan <= 64 ? 256 : (256 * (127 - pan)) / 63);
     chan->rightPan = (uint16_t)(pan >= 64 ? 256 : (256 * pan) / 64);
+}
+
+void opalInit(Opal* self, int sampleRate)
+{
+    memset(self, 0, sizeof(*self));
+
+    for (unsigned ch = 0; ch < OPAL_CHANNEL_COUNT; ch++)
+    {
+        OpalChannel* chan = &self->chan[ch];
+        unsigned bank = ch / OPAL_CHANNELS_PER_BANK;
+        unsigned local = ch % OPAL_CHANNELS_PER_BANK;
+        unsigned first = bank * OPAL_OPERATORS_PER_BANK + (local / 3) * 6 + local % 3;
+        bool leads = local < 3;
+
+        chan->opSlot[0] = (uint8_t)first;
+        chan->opSlot[1] = (uint8_t)(first + 3);
+        chan->opSlot[2] = (uint8_t)(leads ? first + 6 : OPAL_OP_NONE);
+        chan->opSlot[3] = (uint8_t)(leads ? first + 9 : OPAL_OP_NONE);
+        chan->pairIndex = (uint8_t)(leads ? ch + 3 : (local < 6 ? ch - 3 : OPAL_CH_NONE));
+        chan->leftPan = OPAL_FULL_GAIN;
+        chan->rightPan = OPAL_FULL_GAIN;
+        chan->outputEnable = OPAL_OUTPUT_BOTH_SIDES;
+    }
+
+    for (unsigned slot = 0; slot < OPAL_OPERATOR_COUNT; slot++)
+    {
+        OpalOperator* op = &self->op[slot];
+        op->envelopeStage = OPAL_ENVELOPE_STAGE_RELEASE;
+        op->egOut = OPAL_ENVELOPE_SILENT;
+        op->envelope = OPAL_ENVELOPE_SILENT;
+    }
+
+    self->noise = 1;
+    opalRefreshRouting(self);
+    opalSetSampleRate(self, sampleRate);
+}
+
+void opalWriteReg(Opal* self, uint16_t regNum, uint8_t val)
+{
+    opalWrite(self, regNum, val);
+}
+
+void opalFlushWriteBuf(Opal* self)
+{
+    while (self->queueCount > 0)
+    {
+        opalApplyQueuedWrite(self);
+    }
+    self->lastDue = self->chipSamples;
+}
+
+void opalWriteRegBuffered(Opal* self, uint16_t regNum, uint8_t val)
+{
+    if (self->queueCount >= OPAL_WRITEBUF_SIZE - 1)
+    {
+        opalFlushWriteBuf(self);
+    }
+
+    uint64_t due = self->lastDue + OPAL_WRITEBUF_DELAY;
+    if (due < self->chipSamples)
+    {
+        due = self->chipSamples;
+    }
+
+    OpalQueuedWrite* entry = &self->queue[(self->queueHead + self->queueCount) % OPAL_WRITEBUF_SIZE];
+    entry->due = due;
+    entry->regNum = regNum;
+    entry->value = val;
+    self->queueCount = (uint16_t)(self->queueCount + 1u);
+    self->lastDue = due;
 }
